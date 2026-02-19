@@ -22,3 +22,7 @@ sqlite3 inventory.db < inventory_setup.sql
 * **Accuracy:** Does the bot route to the correct data source?
 * **Function Calling:** Does the LLM correctly extract parameters (item name/size) for SQL?
 * **Clean Code:** Adherence to best practices within the 2-hour limit.
+
+## Technology used
+* **Language:** Python is used
+* **Tool used:** VS Code to write the code and test.
