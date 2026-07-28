@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ic:Integration xmlns:ic="http://xmlns.oracle.com/integration/integration"
+                xmlns:tns="http://xmlns.oracle.com/integration/integration"
+                xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+    <ic:Name>PO_Cache_Incremental_Load</ic:Name>
+    <ic:Identifier>PO_Cache_Incremental_Load</ic:Identifier>
+    <ic:Description>Daily incremental load of PO cache tables from EBS to ADB using watermark-based delta logic</ic:Description>
+    <ic:Version>1.0</ic:Version>
+    <ic:CreatedBy>Ayush Rathore</ic:CreatedBy>
+    <ic:CreatedDate>2026-07-28</ic:CreatedDate>
+
+    <!-- TRIGGER: Scheduled -->
+    <ic:TriggerType>SCHEDULED</ic:TriggerType>
+    <ic:Schedule>
+        <ic:ScheduleType>DAILY</ic:ScheduleType>
+        <ic:Time>02:00</ic:Time>
+        <ic:TimeZone>UTC</ic:TimeZone>
+        <ic:DayOfWeek>1,2,3,4,5,6,7</ic:DayOfWeek>
+    </ic:Schedule>
+
+    <!-- CONNECTIONS USED -->
+    <ic:Connection>
+        <ic:Name>ADB_PO_CACHE</ic:Name>
+        <ic:Type>ORACLE_DATABASE</ic:Type>
+        <ic:Description>Autonomous Database for PO cache</ic:Description>
+        <ic:Properties>
+            <ic:Property name="hostname">your-adb-instance.oraclecloud.com</ic:Property>
+            <ic:Property name="port">1521</ic:Property>
+            <ic:Property name="database">your-adb-service-name</ic:Property>
+            <ic:Property name="username">PO_CACHE_ADMIN</ic:Property>
+            <ic:Property name="password">****</ic:Property>
+            <ic:Property name="ssl">true</ic:Property>
+        </ic:Properties>
+    </ic:Connection>
+
+    <!-- ACTIVITIES -->
+    <ic:Activities>
+
+        <!-- ACTIVITY 1: Invoke PO_INCREMENTAL_LOAD Procedure -->
+        <ic:Activity>
+            <ic:Name>Invoke_PO_Incremental_Load</ic:Name>
+            <ic:Type>INVOKE_DATABASE</ic:Type>
+            <ic:Order>1</ic:Order>
+            <ic:Connection>ADB_PO_CACHE</ic:Connection>
+            <ic:Configuration>
+                <ic:OperationType>STORED_PROCEDURE</ic:OperationType>
+                <ic:Schema>PO_CACHE_ADMIN</ic:Schema>
+                <ic:ProcedureName>PO_INCREMENTAL_LOAD</ic:ProcedureName>
+                <ic:Direction>SYNCHRONOUS</ic:Direction>
+            </ic:Configuration>
+            <ic:Mappings>
+                <ic:InputMapping>
+                    <!-- No input parameters required -->
+                </ic:InputMapping>
+                <ic:OutputMapping>
+                    <ic:Target>/Invoke_PO_Incremental_Load_Response</ic:Target>
+                    <ic:Fields>
+                        <ic:Field source="SUCCESS" target="status"/>
+                    </ic:Fields>
+                </ic:OutputMapping>
+            </ic:Mappings>
+            <ic:ErrorHandling>
+                <ic:OnError>CONTINUE_TO_NEXT</ic:OnError>
+                <ic:SetVariable name="procExecutionError" value="$error"/>
+            </ic:ErrorHandling>
+        </ic:Activity>
+
+        <!-- ACTIVITY 2: Query Control Table for Status Verification -->
+        <ic:Activity>
+            <ic:Name>Query_Load_Status</ic:Name>
+            <ic:Type>INVOKE_DATABASE</ic:Type>
+            <ic:Order>2</ic:Order>
+            <ic:Connection>ADB_PO_CACHE</ic:Connection>
+            <ic:Configuration>
+                <ic:OperationType>SQL_SELECT</ic:OperationType>
+                <ic:Schema>PO_CACHE_ADMIN</ic:Schema>
+                <ic:SQLQuery><![CDATA[
+SELECT TABLE_NAME, STATUS, LAST_EXTRACT_DATE, ROWS_MERGED, ERROR_MESSAGE, LAST_RUN_END
+FROM PO_CACHE_LOAD_CONTROL
+ORDER BY TABLE_NAME
+                ]]></ic:SQLQuery>
+            </ic:Configuration>
+            <ic:Mappings>
+                <ic:OutputMapping>
+                    <ic:Target>/LoadStatusResponse</ic:Target>
+                    <ic:ArrayField name="LoadStatus" source="ResultSet"/>
+                </ic:OutputMapping>
+            </ic:Mappings>
+            <ic:ErrorHandling>
+                <ic:OnError>CONTINUE_TO_NEXT</ic:OnError>
+                <ic:SetVariable name="statusQueryError" value="$error"/>
+            </ic:ErrorHandling>
+        </ic:Activity>
+
+        <!-- ACTIVITY 3: Check for Failures -->
+        <ic:Activity>
+            <ic:Name>Check_For_Failed_Status</ic:Name>
+            <ic:Type>CONDITIONAL</ic:Type>
+            <ic:Order>3</ic:Order>
+            <ic:Condition>
+                <ic:Expression>count(/LoadStatusResponse/LoadStatus[STATUS='FAILED']) > 0</ic:Expression>
+            </ic:Condition>
+            <ic:OnTrue>SendFailureAlert</ic:OnTrue>
+            <ic:OnFalse>SendSuccessNotification</ic:OnFalse>
+        </ic:Activity>
+
+        <!-- ACTIVITY 4: Send Failure Alert (if any table failed) -->
+        <ic:Activity>
+            <ic:Name>SendFailureAlert</ic:Name>
+            <ic:Type>INVOKE_NOTIFICATION</ic:Type>
+            <ic:Order>4</ic:Order>
+            <ic:Configuration>
+                <ic:NotificationType>EMAIL</ic:NotificationType>
+                <ic:To>po-cache-dba@company.com</ic:To>
+                <ic:Cc>po-ops@company.com</ic:Cc>
+                <ic:Subject>ALERT: PO Cache Incremental Load Failed</ic:Subject>
+                <ic:Body><![CDATA[
+PO Cache Incremental Load Cycle Failed
+
+EXECUTION DETAILS:
+==================
+Integration: PO_Cache_Incremental_Load
+Execution Time: {$date()}
+Schedule: Daily 02:00 UTC
+
+FAILED TABLES:
+==============
+{for-each /LoadStatusResponse/LoadStatus[STATUS='FAILED']}
+  Table: {TABLE_NAME}
+  Status: {STATUS}
+  Error: {ERROR_MESSAGE}
+  Last Run: {LAST_RUN_END}
+{/for-each}
+
+ACTIONS REQUIRED:
+=================
+1. Check ADB space (SELECT * FROM DBA_FREE_SPACE)
+2. Check EBS connectivity
+3. Review error_message in PO_CACHE_LOAD_CONTROL table
+4. Manual retry: EXEC PO_INCREMENTAL_LOAD()
+5. If persists, escalate to DBA
+
+Next automatic retry: Tomorrow 02:00 UTC
+                ]]></ic:Body>
+            </ic:Configuration>
+            <ic:ErrorHandling>
+                <ic:OnError>CONTINUE</ic:OnError>
+            </ic:ErrorHandling>
+        </ic:Activity>
+
+        <!-- ACTIVITY 5: Send Success Notification -->
+        <ic:Activity>
+            <ic:Name>SendSuccessNotification</ic:Name>
+            <ic:Type>INVOKE_NOTIFICATION</ic:Type>
+            <ic:Order>5</ic:Order>
+            <ic:Configuration>
+                <ic:NotificationType>EMAIL</ic:NotificationType>
+                <ic:To>po-cache-ops@company.com</ic:To>
+                <ic:Subject>SUCCESS: PO Cache Incremental Load Complete</ic:Subject>
+                <ic:Body><![CDATA[
+PO Cache Incremental Load Cycle Completed Successfully
+
+EXECUTION SUMMARY:
+==================
+Integration: PO_Cache_Incremental_Load
+Execution Time: {$date()}
+
+LOAD RESULTS:
+=============
+{for-each /LoadStatusResponse/LoadStatus}
+  Table: {TABLE_NAME}
+  Status: {STATUS}
+  Rows Merged: {ROWS_MERGED}
+  Watermark: {LAST_EXTRACT_DATE}
+  Completed: {LAST_RUN_END}
+{/for-each}
+
+All cache tables synchronized with latest EBS data.
+Next load: Tomorrow 02:00 UTC
+                ]]></ic:Body>
+            </ic:Configuration>
+            <ic:ErrorHandling>
+                <ic:OnError>CONTINUE</ic:OnError>
+            </ic:ErrorHandling>
+        </ic:Activity>
+
+    </ic:Activities>
+
+    <!-- TRACKING & MONITORING -->
+    <ic:Tracking>
+        <ic:TrackVariable name="procStatus" xpath="/Invoke_PO_Incremental_Load_Response/status"/>
+        <ic:TrackVariable name="failureCount" xpath="count(/LoadStatusResponse/LoadStatus[STATUS='FAILED'])"/>
+        <ic:TrackVariable name="totalRowsMerged" xpath="sum(/LoadStatusResponse/LoadStatus/ROWS_MERGED)"/>
+    </ic:Tracking>
+
+    <!-- ERROR HANDLING & RECOVERY -->
+    <ic:ErrorHandling>
+        <ic:FaultHandler>
+            <ic:Name>GlobalErrorHandler</ic:Name>
+            <ic:OnError>
+                <ic:LogMessage level="ERROR" text="PO Cache Load Integration Failed: {$error}"/>
+                <ic:SendEmail to="po-cache-dba@company.com" subject="CRITICAL: PO Cache Load Integration Error">
+                    <ic:Body>
+Integration: PO_Cache_Incremental_Load
+Error: {$error}
+Timestamp: {$date()}
+
+This error occurred outside normal load cycle.
+Check OIC monitoring logs for details.
+                    </ic:Body>
+                </ic:SendEmail>
+            </ic:OnError>
+        </ic:FaultHandler>
+    </ic:ErrorHandling>
+
+    <!-- METADATA -->
+    <ic:Metadata>
+        <ic:Documentation>
+This integration performs daily incremental load of 5 PO cache tables from EBS to ADB:
+- PO_HEADERS_ALL
+- PO_LINES_ALL
+- GL_CODE_COMBINATIONS
+- PO_DISTRIBUTIONS_ALL
+- PO_LINE_LOCATIONS_ALL
+
+Uses watermark-based delta logic (LAST_UPDATE_DATE) to extract only changed rows.
+MERGE statement ensures safe upsert (idempotent, safe to rerun).
+
+Control table: PO_CACHE_LOAD_CONTROL tracks state, watermarks, and metrics per table.
+
+See PO_CACHE_LOAD_PLAN.md for design details and operational procedures.
+        </ic:Documentation>
+    </ic:Metadata>
+
+</ic:Integration>
