@@ -1,0 +1,204 @@
+-- Initial load procedure - extract all data from EBS and load into cache
+-- Run this once before setting up incremental loads
+
+BEGIN
+    -- Step 1: Set control status to RUNNING
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'RUNNING',
+        LAST_RUN_START = SYSDATE,
+        ERROR_MESSAGE = NULL
+    WHERE TABLE_NAME = 'PO_HEADERS_ALL';
+    COMMIT;
+
+    -- Step 2: Extract GL_CODE_COMBINATIONS (small reference table, full reload)
+    INSERT INTO GL_CODE_COMBINATIONS
+    SELECT
+        gcc.CODE_COMBINATION_ID,
+        gcc.CHART_OF_ACCOUNTS_ID,
+        gcc.SEGMENT1, gcc.SEGMENT2, gcc.SEGMENT3, gcc.SEGMENT4, gcc.SEGMENT5,
+        gcc.SEGMENT6, gcc.SEGMENT7, gcc.SEGMENT8, gcc.SEGMENT9, gcc.SEGMENT10,
+        gcc.CREATION_DATE,
+        gcc.CREATED_BY,
+        gcc.LAST_UPDATE_DATE,
+        gcc.LAST_UPDATED_BY,
+        gcc.ENABLED_FLAG,
+        gcc.SUMMARY_FLAG,
+        gcc.DETAIL_POSTING_ALLOWED_FLAG
+    FROM ebs.GL_CODE_COMBINATIONS_ALL gcc;
+
+    -- Step 3: Extract PO_HEADERS_ALL
+    INSERT INTO PO_HEADERS_ALL
+    SELECT
+        pha.PO_HEADER_ID,
+        pha.SEGMENT1, pha.SEGMENT2, pha.SEGMENT3, pha.SEGMENT4, pha.SEGMENT5,
+        pha.VENDOR_ID,
+        pha.VENDOR_SITE_ID,
+        pha.PO_DATE,
+        pha.CREATION_DATE,
+        pha.CREATED_BY,
+        pha.LAST_UPDATE_DATE,
+        pha.LAST_UPDATED_BY,
+        pha.CLOSED_DATE,
+        pha.CLOSED_CODE,
+        pha.STATUS,
+        pha.TYPE_LOOKUP_CODE,
+        pha.CURRENCY_CODE,
+        pha.APPROVAL_STATUS,
+        pha.REVISION_NUM,
+        pha.AGENT_ID,
+        pha.ORG_ID,
+        pha.COMMENTS,
+        pha.AUTHORIZATION_STATUS,
+        pha.QUOTE_VENDOR_QUOTE_NUMBER,
+        pha.QUOTE_EXPIRES_DATE,
+        pha.QUOTE_CREATION_DATE,
+        pha.QUOTATION_CLASS_CODE,
+        pha.START_DATE,
+        pha.END_DATE
+    FROM ebs.PO_HEADERS_ALL pha;
+
+    -- Step 4: Extract PO_LINES_ALL
+    INSERT INTO PO_LINES_ALL
+    SELECT
+        pla.PO_LINE_ID,
+        pla.PO_HEADER_ID,
+        pla.LINE_NUM,
+        pla.LINE_TYPE_ID,
+        pla.ITEM_ID,
+        pla.ITEM_DESCRIPTION,
+        pla.UNIT_MEAS_LOOKUP_CODE,
+        pla.UNIT_PRICE,
+        pla.QUANTITY,
+        pla.AMOUNT,
+        pla.CREATION_DATE,
+        pla.CREATED_BY,
+        pla.LAST_UPDATE_DATE,
+        pla.LAST_UPDATED_BY,
+        pla.CLOSED_CODE,
+        pla.CLOSED_DATE,
+        pla.CANCEL_FLAG,
+        pla.CANCEL_DATE,
+        pla.CANCELLED_BY,
+        pla.LINE_STATUS_ID,
+        pla.AUCTION_HEADER_ID,
+        pla.SUPPLIER_REF_NUMBER
+    FROM ebs.PO_LINES_ALL pla;
+
+    -- Step 5: Extract PO_DISTRIBUTIONS_ALL
+    INSERT INTO PO_DISTRIBUTIONS_ALL
+    SELECT
+        pda.PO_DISTRIBUTION_ID,
+        pda.PO_HEADER_ID,
+        pda.PO_LINE_ID,
+        pda.LINE_LOCATION_ID,
+        pda.DISTRIBUTION_NUM,
+        pda.QUANTITY_ORDERED,
+        pda.QUANTITY_DELIVERED,
+        pda.QUANTITY_CANCELLED,
+        pda.QUANTITY_BILLED,
+        pda.AMOUNT_ORDERED,
+        pda.AMOUNT_DELIVERED,
+        pda.AMOUNT_BILLED,
+        pda.CREATION_DATE,
+        pda.CREATED_BY,
+        pda.LAST_UPDATE_DATE,
+        pda.LAST_UPDATED_BY,
+        pda.CODE_COMBINATION_ID,
+        pda.ORG_ID,
+        pda.DISTRIBUTION_ACCOUNT_ID,
+        pda.MATCH_OPTION,
+        pda.DESTINATION_TYPE_CODE,
+        pda.DESTINATION_ORGANIZATION_ID,
+        pda.DESTINATION_SUBINVENTORY,
+        pda.REASON_DISPUTED_FLAG,
+        pda.FINALLY_CLOSED_FLAG
+    FROM ebs.PO_DISTRIBUTIONS_ALL pda;
+
+    -- Step 6: Extract PO_LINE_LOCATIONS_ALL
+    INSERT INTO PO_LINE_LOCATIONS_ALL
+    SELECT
+        plla.LINE_LOCATION_ID,
+        plla.PO_HEADER_ID,
+        plla.PO_LINE_ID,
+        plla.LOCATION_ID,
+        plla.QUANTITY_ORDERED,
+        plla.QUANTITY_DELIVERED,
+        plla.QUANTITY_CANCELLED,
+        plla.QUANTITY_BILLED,
+        plla.UNIT_MEAS_LOOKUP_CODE,
+        plla.UNIT_PRICE,
+        plla.AMOUNT,
+        plla.CREATION_DATE,
+        plla.CREATED_BY,
+        plla.LAST_UPDATE_DATE,
+        plla.LAST_UPDATED_BY,
+        plla.CLOSED_CODE,
+        plla.CLOSED_DATE,
+        plla.CANCEL_FLAG,
+        plla.CANCEL_DATE,
+        plla.CANCELLED_BY,
+        plla.SHIPMENT_NUM,
+        plla.SHIPMENT_TYPE,
+        plla.NEED_BY_DATE,
+        plla.PRICE_OVERRIDE_FLAG,
+        plla.TAX_CODE_ID,
+        plla.MATCH_OPTION
+    FROM ebs.PO_LINE_LOCATIONS_ALL plla;
+
+    COMMIT;
+
+    -- Step 7: Set watermarks and status SUCCESS for all tables
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'SUCCESS',
+        LAST_RUN_END = SYSDATE,
+        LAST_EXTRACT_DATE = (SELECT MAX(LAST_UPDATE_DATE) FROM GL_CODE_COMBINATIONS),
+        ROWS_READ = (SELECT COUNT(*) FROM GL_CODE_COMBINATIONS),
+        ROWS_MERGED = (SELECT COUNT(*) FROM GL_CODE_COMBINATIONS)
+    WHERE TABLE_NAME = 'GL_CODE_COMBINATIONS';
+
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'SUCCESS',
+        LAST_RUN_END = SYSDATE,
+        LAST_EXTRACT_DATE = (SELECT MAX(LAST_UPDATE_DATE) FROM PO_HEADERS_ALL),
+        ROWS_READ = (SELECT COUNT(*) FROM PO_HEADERS_ALL),
+        ROWS_MERGED = (SELECT COUNT(*) FROM PO_HEADERS_ALL)
+    WHERE TABLE_NAME = 'PO_HEADERS_ALL';
+
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'SUCCESS',
+        LAST_RUN_END = SYSDATE,
+        LAST_EXTRACT_DATE = (SELECT MAX(LAST_UPDATE_DATE) FROM PO_LINES_ALL),
+        ROWS_READ = (SELECT COUNT(*) FROM PO_LINES_ALL),
+        ROWS_MERGED = (SELECT COUNT(*) FROM PO_LINES_ALL)
+    WHERE TABLE_NAME = 'PO_LINES_ALL';
+
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'SUCCESS',
+        LAST_RUN_END = SYSDATE,
+        LAST_EXTRACT_DATE = (SELECT MAX(LAST_UPDATE_DATE) FROM PO_DISTRIBUTIONS_ALL),
+        ROWS_READ = (SELECT COUNT(*) FROM PO_DISTRIBUTIONS_ALL),
+        ROWS_MERGED = (SELECT COUNT(*) FROM PO_DISTRIBUTIONS_ALL)
+    WHERE TABLE_NAME = 'PO_DISTRIBUTIONS_ALL';
+
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'SUCCESS',
+        LAST_RUN_END = SYSDATE,
+        LAST_EXTRACT_DATE = (SELECT MAX(LAST_UPDATE_DATE) FROM PO_LINE_LOCATIONS_ALL),
+        ROWS_READ = (SELECT COUNT(*) FROM PO_LINE_LOCATIONS_ALL),
+        ROWS_MERGED = (SELECT COUNT(*) FROM PO_LINE_LOCATIONS_ALL)
+    WHERE TABLE_NAME = 'PO_LINE_LOCATIONS_ALL';
+
+    COMMIT;
+
+    DBMS_OUTPUT.PUT_LINE('Initial load completed successfully');
+
+EXCEPTION WHEN OTHERS THEN
+    UPDATE PO_CACHE_LOAD_CONTROL
+    SET STATUS = 'FAILED',
+        ERROR_MESSAGE = SQLERRM
+    WHERE TABLE_NAME IN ('PO_HEADERS_ALL', 'PO_LINES_ALL', 'GL_CODE_COMBINATIONS',
+                         'PO_DISTRIBUTIONS_ALL', 'PO_LINE_LOCATIONS_ALL');
+    COMMIT;
+    RAISE;
+END;
+/
