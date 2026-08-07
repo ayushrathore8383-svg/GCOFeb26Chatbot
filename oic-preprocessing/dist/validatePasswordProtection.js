@@ -529,8 +529,24 @@ function validatePasswordProtection(base64Content) {
             return res;
         }
 
-        /* Read the encryption dictionary values. */
-        var window = s.substring(encIdx, encIdx + 4000);
+        /* Read the encryption dictionary values. In the trailer /Encrypt is almost
+           always an indirect reference ("/Encrypt 9 0 R") pointing at an object
+           earlier in the file, so the reference has to be followed - reading
+           forward from /Encrypt alone lands past the end of the document. */
+        var window = '';
+        var ref = s.substring(encIdx, encIdx + 64).match(/^\/Encrypt\s+(\d+)\s+(\d+)\s+R/);
+        if (ref) {
+            var objRe = new RegExp('(?:^|[^0-9])' + ref[1] + '\\s+' + ref[2] + '\\s+obj');
+            var om = objRe.exec(s);
+            if (om) {
+                var objStart = om.index + om[0].length;
+                window = s.substring(objStart, objStart + 4000);
+            }
+        }
+        if (window === '') {
+            /* inline dictionary, or the referenced object could not be located */
+            window = s.substring(encIdx, encIdx + 4000);
+        }
         var mv = window.match(/\/V\s+(\d+)/);
         var mr = window.match(/\/R\s+(\d+)/);
         var mp = window.match(/\/P\s+(-?\d+)/);

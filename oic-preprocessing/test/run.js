@@ -87,6 +87,14 @@ console.log('\n2. validatePasswordProtection');
     show(r);
 });
 
+(function () {
+    var r = LIB.password.validatePasswordProtection(b64('encrypted_invoice.pdf'));
+    check('encryption dict /V resolved', r.encryptVersion, 2);
+    check('encryption dict /R resolved', r.encryptRevision, 3);
+    check('encryption dict /P resolved', r.permissions, -3904);
+    check('encryption dict /Filter resolved', r.cryptFilter, 'Standard');
+})();
+
 console.log('\n   text extraction sanity');
 (function () {
     var r = LIB.zero.zv_extractPdfText(b64('valid_invoice.pdf'));
