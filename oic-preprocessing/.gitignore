@@ -1,1 +1,5 @@
 test/fixtures/
+node_modules/
+package.json
+package-lock.json
+tester-screenshot.png

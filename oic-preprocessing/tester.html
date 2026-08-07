@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>OIC invoice pre-processing tester</title>
+<style>
+  :root { --line: #d8dbe0; --ink: #1c1f24; --mute: #5b626c; --bg: #f6f7f9; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         color: var(--ink); margin: 0; padding: 28px; background: var(--bg); }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  p.sub { color: var(--mute); margin: 0 0 22px; }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px;
+           padding: 18px; margin-bottom: 18px; }
+  #drop { border: 2px dashed #b6bcc5; border-radius: 8px; padding: 34px; text-align: center;
+          color: var(--mute); cursor: pointer; background: #fff; }
+  #drop.over { border-color: #2f6fdb; background: #eef4ff; color: #2f6fdb; }
+  label { display: inline-block; font-weight: 600; margin: 0 6px 0 0; }
+  input[type=text] { border: 1px solid var(--line); border-radius: 5px; padding: 6px 9px;
+                     font: inherit; width: 190px; }
+  .opts { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); }
+  td.tag { white-space: nowrap; font-weight: 700; font-size: 12px; }
+  .pass { color: #1a7f37; } .rej { color: #b32222; }
+  .skip { color: #8a6d00; } .err { color: #b32222; }
+  .reason { color: var(--mute); }
+  .verdict { margin-top: 16px; padding: 12px 14px; border-radius: 6px; font-weight: 600; }
+  .verdict.go { background: #e7f5ea; color: #1a7f37; }
+  .verdict.no { background: #fdeaea; color: #b32222; }
+  .verdict.warn { background: #fdf5e0; color: #8a6d00; }
+  pre { background: #f2f3f5; border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+        overflow: auto; max-height: 320px; font-size: 12px; white-space: pre-wrap; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--mute); }
+  .file { font-weight: 700; margin: 22px 0 0; }
+</style>
+</head>
+<body>
+
+<h1>OIC invoice pre-processing tester</h1>
+<p class="sub">Runs the six validation libraries in pipeline order, in your browser. Nothing
+is uploaded anywhere &mdash; the PDF is read locally by the same JavaScript that will run in OIC.</p>
+
+<div class="panel">
+  <div class="opts">
+    <span><label for="prefixes">Pharmacy PO prefixes</label>
+      <input id="prefixes" type="text" value="PH,PHM,RX"></span>
+    <span><label for="family">Invoice family</label>
+      <input id="family" type="text" placeholder="INVOICE,CREDIT_NOTE"></span>
+    <span><label for="tolerance">Zero tolerance</label>
+      <input id="tolerance" type="text" placeholder="0" style="width:70px"></span>
+    <span><label for="runAll"><input id="runAll" type="checkbox"> run all six even after a rejection</label></span>
+  </div>
+</div>
+
+<div id="drop" class="panel">
+  Drop one or more PDFs here, or click to choose
+  <input id="picker" type="file" accept="application/pdf,.pdf" multiple hidden>
+</div>
+
+<div id="out"></div>
+
+<script src="dist/validateFileFormat.js"></script>
+<script src="dist/validatePasswordProtection.js"></script>
+<script src="dist/validateZeroValue.js"></script>
+<script src="dist/classifyDocument.js"></script>
+<script src="dist/validatePharmacyInvoice.js"></script>
+<script src="dist/validateMultiInvoice.js"></script>
+
+<script>
+var INDETERMINATE = { TOTAL_NOT_FOUND: 1, UNCLASSIFIED: 1, PO_NOT_FOUND: 1,
+                      UNDETERMINED: 1, CONFIG_MISSING: 1 };
+
+function verdictOf(status) {
+  if (status === 'PASSED') { return 'pass'; }
+  if (status === 'ERROR') { return 'err'; }
+  if (INDETERMINATE[status]) { return 'skip'; }
+  return 'rej';
+}
+
+function toBase64(arrayBuffer) {
+  var bytes = new Uint8Array(arrayBuffer);
+  var chunk = 0x8000;
+  var parts = [];
+  for (var i = 0; i < bytes.length; i += chunk) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)));
+  }
+  return btoa(parts.join(''));
+}
+
+function runPipeline(fileName, b64, opts) {
+  var steps = [];
+  var pdfText = '';
+  var stopped = false;
+
+  /* Only a rejection (or an error) stops the chain. A check that could not run on the
+     evidence available must not halt it: a scanned PDF returns TOTAL_NOT_FOUND at
+     step 3, and stopping there would skip the classification and multi-invoice
+     checks, which can still reject the document. */
+  function step(n, name, result) {
+    steps.push({ n: n, name: name, result: result });
+    var v = verdictOf(result.status);
+    if ((v === 'rej' || v === 'err') && !opts.all) { stopped = true; }
+  }
+
+  step(1, 'File format', validateFileFormat(fileName, b64));
+  if (!stopped) { step(2, 'Password protection', validatePasswordProtection(b64)); }
+  if (!stopped) {
+    pdfText = zv_extractPdfText(b64).text;
+    step(3, 'Zero value', validateZeroValue('', pdfText, opts.tolerance));
+  }
+  if (!stopped) { step(4, 'Classification', classifyDocument('', pdfText, opts.family)); }
+  if (!stopped) { step(5, 'Pharmacy', validatePharmacyInvoice('', pdfText, opts.prefixes)); }
+  if (!stopped) { step(6, 'Multi-invoice', validateMultiInvoice(b64, pdfText)); }
+
+  var clean = steps.length === 6;
+  for (var s = 0; s < steps.length; s++) {
+    if (steps[s].result.status !== 'PASSED') { clean = false; }
+  }
+  return { steps: steps, pdfText: pdfText, clean: clean };
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function render(fileName, run) {
+  var rows = run.steps.map(function (s) {
+    var v = verdictOf(s.result.status);
+    var label = v === 'pass' ? 'PASS' : (v === 'rej' ? 'REJECT'
+              : (v === 'skip' ? 'SKIPPED' : 'ERROR'));
+    return '<tr>' +
+      '<td>' + s.n + '. ' + esc(s.name) + '</td>' +
+      '<td class="tag ' + v + '">' + label + '</td>' +
+      '<td>' + esc(s.result.status) + '</td>' +
+      '<td class="reason">' + esc(s.result.reason || s.result.error) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  var stop = null;
+  for (var i = 0; i < run.steps.length; i++) {
+    var sv = verdictOf(run.steps[i].result.status);
+    if (sv === 'rej' || sv === 'err') { stop = run.steps[i]; break; }
+  }
+
+  var v;
+  if (stop) {
+    v = '<div class="verdict no">REJECTED at step ' + stop.n + ' (' + esc(stop.name) +
+        ') &mdash; ' + esc(stop.result.status) + '</div>';
+  } else if (run.clean) {
+    v = '<div class="verdict go">Proceeds to DU key-value extraction, all six checks clean</div>';
+  } else {
+    v = '<div class="verdict warn">Proceeds to DU, but some checks could not run ' +
+        '(SKIPPED rows above)</div>';
+  }
+
+  return '<div class="panel">' +
+    '<div class="file">' + esc(fileName) + '</div>' +
+    '<table><thead><tr><th>Check</th><th></th><th>Status</th><th>Reason</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' + v +
+    '<details><summary>Extracted text layer (' + run.pdfText.length + ' chars)</summary>' +
+    '<pre>' + esc(run.pdfText || '(none - scanned or image-only PDF)') + '</pre></details>' +
+    '<details><summary>Raw result objects</summary><pre>' +
+    esc(JSON.stringify(run.steps.map(function (s) { return s.result; }), null, 2)) +
+    '</pre></details></div>';
+}
+
+function handleFiles(fileList) {
+  var out = document.getElementById('out');
+  out.innerHTML = '';
+  var opts = {
+    prefixes: document.getElementById('prefixes').value,
+    family: document.getElementById('family').value,
+    tolerance: document.getElementById('tolerance').value,
+    all: document.getElementById('runAll').checked
+  };
+
+  Array.prototype.forEach.call(fileList, function (file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var html;
+      try {
+        html = render(file.name, runPipeline(file.name, toBase64(reader.result), opts));
+      } catch (e) {
+        html = '<div class="panel"><div class="file">' + esc(file.name) +
+               '</div><p class="err">Harness failed: ' + esc(e.message) + '</p></div>';
+      }
+      out.insertAdjacentHTML('beforeend', html);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+var drop = document.getElementById('drop');
+var picker = document.getElementById('picker');
+drop.addEventListener('click', function () { picker.click(); });
+picker.addEventListener('change', function () { handleFiles(picker.files); });
+drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
+drop.addEventListener('drop', function (e) {
+  e.preventDefault();
+  drop.classList.remove('over');
+  handleFiles(e.dataTransfer.files);
+});
+
+/* exposed so an automated browser check can drive the page without a real drop event */
+window.__runFromBase64 = function (name, b64) {
+  return runPipeline(name, b64, {
+    prefixes: document.getElementById('prefixes').value,
+    family: '', tolerance: '', all: false
+  });
+};
+</script>
+</body>
+</html>

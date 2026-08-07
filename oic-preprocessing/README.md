@@ -48,9 +48,15 @@ check 5, `invoiceNumbers` and `pageCount` on check 6.
 
 ## Wiring it into the integration
 
-Read the object from Object Storage as base64 once, then chain the six calls. Stop at the
-first non-`PASSED` status and skip the rest — no point classifying a file that is not a
-PDF.
+Read the object from Object Storage as base64 once, then chain the six calls.
+
+**Stop the chain on a rejection status or on `ERROR`. Do not stop on a could-not-determine
+status.** This distinction matters more than it looks. A statement with no recognisable
+total returns `TOTAL_NOT_FOUND` at check 3; halting there skips check 4, which is the one
+that identifies it as a statement and rejects it. A multi-invoice PDF with no PO line
+returns `PO_NOT_FOUND` at check 5; halting there skips check 6, the check that catches it.
+Testing the six checks against the fixture set, treating any non-`PASSED` status as a stop
+let three of eleven documents through that should have been rejected.
 
 Checks 3 to 6 all need the PDF text. Parsing it four times wastes the whole call. Each of
 those four libraries exposes a text extractor (`zv_extractPdfText`, `dc_extractPdfText`,
@@ -61,18 +67,22 @@ the PDF object structure rather than the text.
 
 ```
 fileName ─▶ 1 validateFileFormat(fileName, b64)
-              └─ status != PASSED ─▶ APEX rejected queue
+              └─ NOT_PDF / EMPTY_FILE / CORRUPT_PDF ─▶ APEX rejected queue
          ─▶ 2 validatePasswordProtection(b64)
               └─ PASSWORD_PROTECTED ─▶ APEX rejected, status "Password Protected"
          ─▶    zv_extractPdfText(b64) ──▶ pdfText
          ─▶ 3 validateZeroValue("", pdfText, "")
-              └─ ZERO_VALUE ─▶ rejected, no DU call
+              ├─ ZERO_VALUE      ─▶ rejected, no DU call
+              └─ TOTAL_NOT_FOUND ─▶ carry on to check 4
          ─▶ 4 classifyDocument("", pdfText, "INVOICE,CREDIT_NOTE")
-              └─ NOT_INVOICE ─▶ excluded from the APEX processing queue
+              ├─ NOT_INVOICE   ─▶ excluded from the APEX processing queue
+              └─ UNCLASSIFIED  ─▶ carry on to check 5
          ─▶ 5 validatePharmacyInvoice("", pdfText, "PH,PHM,RX")
-              └─ PHARMACY_INVOICE ─▶ APEX rejected, pharmacy handling
+              ├─ PHARMACY_INVOICE ─▶ APEX rejected, pharmacy handling
+              └─ PO_NOT_FOUND     ─▶ carry on to check 6
          ─▶ 6 validateMultiInvoice(b64, pdfText)
-              └─ MULTI_INVOICE ─▶ rejected, logged to DB, manual AP handling
+              ├─ MULTI_INVOICE ─▶ rejected, logged to DB, manual AP handling
+              └─ UNDETERMINED  ─▶ carry on
          ─▶ DU key-value extraction
 ```
 
@@ -125,6 +135,38 @@ so the AP team can see why from the rejected queue.
 
 Text extraction handles `FlateDecode` and uncompressed content streams. Custom-encoded
 subset fonts without a WinAnsi-compatible encoding may extract as garbage.
+
+## Testing before you touch OIC
+
+Two runners, both driving the exact files you will upload.
+
+**Browser** — no install needed. Open `tester.html`, drop PDFs on it. It loads the six
+`dist/` files with plain `<script>` tags, runs the pipeline in order, and shows each
+check's status, reason and raw result object, plus the extracted text layer. Everything
+stays on your machine; nothing is uploaded. Use this if Node is not available, or to hand
+the check to someone in AP without a toolchain.
+
+**Command line** — for batches and regression runs.
+
+```bash
+node test/check.js invoice.pdf --prefixes PH,PHM,RX
+node test/check.js invoice.pdf --text              # print the extracted text layer
+node test/check.js invoice.pdf --all               # run all six, ignore the stop condition
+node test/check.js ./real-invoices --prefixes PH --csv triage.csv
+```
+
+Point it at a folder and it processes every PDF inside, prints a summary and writes one
+CSV row per file: outcome, all six statuses, `has_text_layer`, `text_chars`, gross total,
+document type, PO number, page count and invoice numbers.
+
+Run the folder mode over a representative sample of real intake before you wire any of
+this in. The `no text layer (scanned)` count in the summary is the number that decides
+whether this gate is worth having: those documents can only be checked by validations 1
+and 2, and the CSV shows you the share directly.
+
+To exercise the libraries against something other than a PDF file — a base64 string
+straight out of an OIC activity, say — `test/run.js` shows the sandbox pattern: load a
+`dist/` file into a bare `vm` context and call the function.
 
 ## Working on the code
 
