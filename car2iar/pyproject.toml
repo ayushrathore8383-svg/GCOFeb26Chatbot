@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "car2iar"
+version = "1.0.0"
+description = "Offline splitter turning an OIC project archive (.car) into per-integration .iar files"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+web = ["flask>=3.0"]
+dev = ["flask>=3.0", "pytest>=7"]
+
+[project.scripts]
+car2iar = "car2iar.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["car2iar*"]

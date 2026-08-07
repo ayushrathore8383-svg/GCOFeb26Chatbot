@@ -1,0 +1,3 @@
+# CLI needs nothing beyond the standard library.
+# Flask is required only for the `car2iar web` drag-and-drop UI.
+flask>=3.0
