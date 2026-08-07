@@ -49,3 +49,30 @@ TARGETS.forEach(function (t) {
     fs.writeFileSync(path.join(DIST, t.out), src);
     console.log(t.out + '  ' + Math.round(src.length / 1024) + ' KB');
 });
+
+/*
+ * Standalone tester: the same page with all six libraries inlined, so it runs from
+ * any folder with no dist/ beside it. Nothing to install and nothing to unzip in
+ * the right order, which is the whole point of it.
+ */
+var tester = fs.readFileSync(path.join(__dirname, 'tester.html'), 'utf8');
+var inlined = TARGETS.map(function (t) {
+    return '<script>\n/* ' + t.out + ' */\n' +
+        fs.readFileSync(path.join(DIST, t.out), 'utf8') +
+        '\n<\/script>';
+}).join('\n');
+
+var standalone = tester.replace(
+    /<!--LIBS-START-->[\s\S]*?<!--LIBS-END-->/,
+    '<!-- The six OIC libraries, inlined verbatim from dist/. This file is generated;\n' +
+    '     edit tester.html and src/, then rerun build.js. -->\n' + inlined
+);
+
+if (standalone === tester) {
+    throw new Error('tester.html is missing the LIBS-START/LIBS-END markers');
+}
+
+var outFile = path.join(DIST, 'oic-validator-tester.html');
+fs.writeFileSync(outFile, standalone);
+console.log('oic-validator-tester.html  ' + Math.round(standalone.length / 1024) +
+    ' KB  (standalone, no dist/ needed)');

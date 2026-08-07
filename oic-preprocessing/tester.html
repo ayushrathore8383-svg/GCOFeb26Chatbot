@@ -63,12 +63,48 @@ is uploaded anywhere &mdash; the PDF is read locally by the same JavaScript that
 
 <div id="out"></div>
 
+<!--LIBS-START-->
 <script src="dist/validateFileFormat.js"></script>
 <script src="dist/validatePasswordProtection.js"></script>
 <script src="dist/validateZeroValue.js"></script>
 <script src="dist/classifyDocument.js"></script>
 <script src="dist/validatePharmacyInvoice.js"></script>
 <script src="dist/validateMultiInvoice.js"></script>
+<!--LIBS-END-->
+
+<script>
+/* If the six libraries did not load, say so plainly instead of failing later with
+   "validateFileFormat is not defined" once a PDF has already been dropped. */
+(function () {
+  var need = [
+    ['validateFileFormat', 'validateFileFormat.js'],
+    ['validatePasswordProtection', 'validatePasswordProtection.js'],
+    ['zv_extractPdfText', 'validateZeroValue.js'],
+    ['validateZeroValue', 'validateZeroValue.js'],
+    ['classifyDocument', 'classifyDocument.js'],
+    ['validatePharmacyInvoice', 'validatePharmacyInvoice.js'],
+    ['validateMultiInvoice', 'validateMultiInvoice.js']
+  ];
+  var missing = [];
+  for (var i = 0; i < need.length; i++) {
+    if (typeof window[need[i][0]] !== 'function' && missing.indexOf(need[i][1]) < 0) {
+      missing.push(need[i][1]);
+    }
+  }
+  if (missing.length === 0) { return; }
+  document.getElementById('drop').style.display = 'none';
+  document.getElementById('out').innerHTML =
+    '<div class="panel"><div class="file" style="color:#b32222">' +
+    'The validation libraries did not load</div>' +
+    '<p>This page expects a <code>dist</code> folder beside it holding the six built ' +
+    '<code>.js</code> files. Not found: <code>' + missing.join('</code>, <code>') +
+    '</code>.</p>' +
+    '<p>Either put this file in the <code>oic-preprocessing</code> folder so that ' +
+    '<code>dist/</code> sits next to it, or use the standalone build ' +
+    '<code>dist/oic-validator-tester.html</code>, which has all six libraries ' +
+    'inlined and works from any folder on its own.</p></div>';
+})();
+</script>
 
 <script>
 var INDETERMINATE = { TOTAL_NOT_FOUND: 1, UNCLASSIFIED: 1, PO_NOT_FOUND: 1,

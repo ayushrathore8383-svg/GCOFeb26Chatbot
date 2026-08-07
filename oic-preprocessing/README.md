@@ -140,11 +140,16 @@ subset fonts without a WinAnsi-compatible encoding may extract as garbage.
 
 Two runners, both driving the exact files you will upload.
 
-**Browser** — no install needed. Open `tester.html`, drop PDFs on it. It loads the six
-`dist/` files with plain `<script>` tags, runs the pipeline in order, and shows each
-check's status, reason and raw result object, plus the extracted text layer. Everything
-stays on your machine; nothing is uploaded. Use this if Node is not available, or to hand
-the check to someone in AP without a toolchain.
+**Browser** — no install needed. Open `dist/oic-validator-tester.html` and drop PDFs on
+it. Every check's status, reason and raw result object is shown, plus the extracted text
+layer. Everything stays on your machine; nothing is uploaded. Use this if Node is not
+available, or to hand the check to someone in AP without a toolchain.
+
+That file is a single self-contained page with all six libraries inlined, so it runs from
+any folder on its own — copy it to a desktop, email it, it still works. `tester.html` in
+the project root is the same page loading the libraries with `<script src="dist/...">`
+tags instead; it only works with a `dist/` folder beside it, and is what `build.js` uses
+as the template. Prefer the standalone file unless you are editing the page itself.
 
 **Command line** — for batches and regression runs.
 
@@ -173,15 +178,17 @@ straight out of an OIC activity, say — `test/run.js` shows the sandbox pattern
 `dist/` is generated. Edit `src/` and rebuild:
 
 ```bash
-node build.js          # regenerate dist/
+node build.js          # regenerate dist/, including the standalone tester
 python3 test/make_fixtures.py
-node test/run.js       # 55 assertions
+node test/run.js       # 59 assertions
 ```
 
 `src/_coreA.js` holds base64 decoding, `src/_coreB.js` holds the DEFLATE decompressor and
 the PDF text extractor, and `src/0*.body.js` holds one validation each. `build.js`
 concatenates the core into each body and rewrites the `__P__` placeholder to the
-per-file prefix.
+per-file prefix. It then builds `dist/oic-validator-tester.html` by substituting the six
+built files into `tester.html` between the `LIBS-START` and `LIBS-END` markers, so the
+page is maintained once rather than twice.
 
 The test harness loads each built file into a bare `vm` context with no Node globals, so
 an accidental `require`, `Buffer` or `console` fails locally rather than in OIC. Fixtures

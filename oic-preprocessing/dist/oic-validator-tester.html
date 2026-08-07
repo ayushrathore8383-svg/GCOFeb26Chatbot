@@ -1,0 +1,3454 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>OIC invoice pre-processing tester</title>
+<style>
+  :root { --line: #d8dbe0; --ink: #1c1f24; --mute: #5b626c; --bg: #f6f7f9; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         color: var(--ink); margin: 0; padding: 28px; background: var(--bg); }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  p.sub { color: var(--mute); margin: 0 0 22px; }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px;
+           padding: 18px; margin-bottom: 18px; }
+  #drop { border: 2px dashed #b6bcc5; border-radius: 8px; padding: 34px; text-align: center;
+          color: var(--mute); cursor: pointer; background: #fff; }
+  #drop.over { border-color: #2f6fdb; background: #eef4ff; color: #2f6fdb; }
+  label { display: inline-block; font-weight: 600; margin: 0 6px 0 0; }
+  input[type=text] { border: 1px solid var(--line); border-radius: 5px; padding: 6px 9px;
+                     font: inherit; width: 190px; }
+  .opts { display: flex; gap: 22px; flex-wrap: wrap; align-items: center; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); }
+  td.tag { white-space: nowrap; font-weight: 700; font-size: 12px; }
+  .pass { color: #1a7f37; } .rej { color: #b32222; }
+  .skip { color: #8a6d00; } .err { color: #b32222; }
+  .reason { color: var(--mute); }
+  .verdict { margin-top: 16px; padding: 12px 14px; border-radius: 6px; font-weight: 600; }
+  .verdict.go { background: #e7f5ea; color: #1a7f37; }
+  .verdict.no { background: #fdeaea; color: #b32222; }
+  .verdict.warn { background: #fdf5e0; color: #8a6d00; }
+  pre { background: #f2f3f5; border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+        overflow: auto; max-height: 320px; font-size: 12px; white-space: pre-wrap; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--mute); }
+  .file { font-weight: 700; margin: 22px 0 0; }
+</style>
+</head>
+<body>
+
+<h1>OIC invoice pre-processing tester</h1>
+<p class="sub">Runs the six validation libraries in pipeline order, in your browser. Nothing
+is uploaded anywhere &mdash; the PDF is read locally by the same JavaScript that will run in OIC.</p>
+
+<div class="panel">
+  <div class="opts">
+    <span><label for="prefixes">Pharmacy PO prefixes</label>
+      <input id="prefixes" type="text" value="PH,PHM,RX"></span>
+    <span><label for="family">Invoice family</label>
+      <input id="family" type="text" placeholder="INVOICE,CREDIT_NOTE"></span>
+    <span><label for="tolerance">Zero tolerance</label>
+      <input id="tolerance" type="text" placeholder="0" style="width:70px"></span>
+    <span><label for="runAll"><input id="runAll" type="checkbox"> run all six even after a rejection</label></span>
+  </div>
+</div>
+
+<div id="drop" class="panel">
+  Drop one or more PDFs here, or click to choose
+  <input id="picker" type="file" accept="application/pdf,.pdf" multiple hidden>
+</div>
+
+<div id="out"></div>
+
+<!-- The six OIC libraries, inlined verbatim from dist/. This file is generated;
+     edit tester.html and src/, then rerun build.js. -->
+<script>
+/* validateFileFormat.js */
+/*
+ * Oracle Integration Cloud - AP invoice pre-processing.
+ * Deployable JavaScript library: validateFileFormat.js
+ *
+ * Generated from oic-preprocessing/src by build.js - edit the sources, not this file.
+ * Pure ECMAScript 5. No JAR, no require(), no browser or Node APIs.
+ */
+
+/* ---------- core A: base64 + byte helpers (no dependencies) ---------- */
+
+function ff_b64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var lookup = {};
+    var i;
+    for (i = 0; i < chars.length; i++) {
+        lookup[chars.charAt(i)] = i;
+    }
+    var clean = String(b64 === null || b64 === undefined ? '' : b64).replace(/[^A-Za-z0-9+\/]/g, '');
+    var len = clean.length;
+    var bytes = [];
+    var buf = 0;
+    var bits = 0;
+    for (i = 0; i < len; i++) {
+        buf = (buf << 6) | lookup[clean.charAt(i)];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buf >> bits) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+function ff_bytesToLatin1(bytes) {
+    var parts = [];
+    var chunk = [];
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+        chunk.push(String.fromCharCode(bytes[i] & 0xFF));
+        if (chunk.length === 8192) {
+            parts.push(chunk.join(''));
+            chunk = [];
+        }
+    }
+    parts.push(chunk.join(''));
+    return parts.join('');
+}
+
+function ff_isPdf(bytes) {
+    var head = ff_bytesToLatin1(bytes.slice(0, 1024));
+    return head.indexOf('%PDF-') >= 0;
+}
+
+/**
+ * VALIDATION 1 - File format validation.
+ *
+ * OIC call signature:
+ *   validateFileFormat(fileName, base64Content)
+ *
+ * fileName       - the Object Storage object name, e.g. "INV-00123.pdf"
+ * base64Content  - the object read as base64. Required: empty content is rejected
+ *                  as EMPTY_FILE.
+ *
+ * Reject when status !== "PASSED". Statuses: PASSED, NOT_PDF, EMPTY_FILE,
+ * CORRUPT_PDF, ERROR.
+ *
+ * Checks run in order: extension, non-empty, %PDF- header, %%EOF trailer. The
+ * header check is what catches a non-PDF that has simply been renamed to .pdf.
+ */
+function validateFileFormat(fileName, base64Content) {
+    var res = {
+        validation: 'FILE_FORMAT',
+        passed: false,
+        passedFlag: 'N',
+        status: 'ERROR',
+        reason: '',
+        fileName: String(fileName === null || fileName === undefined ? '' : fileName),
+        extension: '',
+        extensionOk: false,
+        magicOk: false,
+        eofOk: false,
+        pdfVersion: '',
+        sizeBytes: 0,
+        error: ''
+    };
+
+    try {
+        var name = res.fileName;
+        var dot = name.lastIndexOf('.');
+        res.extension = dot >= 0 ? name.substring(dot + 1).toLowerCase() : '';
+        res.extensionOk = res.extension === 'pdf';
+
+        /* Extension is checked first so a .xlsx never reports as "empty". */
+        if (!res.extensionOk) {
+            res.status = 'NOT_PDF';
+            res.reason = 'File extension is "' + res.extension + '", expected "pdf".';
+            return res;
+        }
+
+        var bytes = ff_b64ToBytes(base64Content);
+        res.sizeBytes = bytes.length;
+
+        /* An empty payload is always a rejection. There is deliberately no
+           "name only" mode: a zero-byte object and a missing object would be
+           indistinguishable, and letting either through would send an unreadable
+           file to Document Understanding. */
+        if (res.sizeBytes === 0) {
+            res.status = 'EMPTY_FILE';
+            res.reason = 'File content is zero bytes (object empty, or no content was ' +
+                'passed to the validation).';
+            return res;
+        }
+
+        var head = ff_bytesToLatin1(bytes.slice(0, 1024));
+        var magicAt = head.indexOf('%PDF-');
+        res.magicOk = magicAt >= 0;
+        if (res.magicOk) {
+            var m = head.substring(magicAt).match(/^%PDF-(\d\.\d)/);
+            res.pdfVersion = m ? m[1] : '';
+        }
+
+        var tailStart = bytes.length > 2048 ? bytes.length - 2048 : 0;
+        var tail = ff_bytesToLatin1(bytes.slice(tailStart));
+        res.eofOk = tail.indexOf('%%EOF') >= 0;
+
+        if (!res.magicOk) {
+            res.status = 'NOT_PDF';
+            res.reason = 'File is named .pdf but the content does not start with the ' +
+                '%PDF- header.';
+            return res;
+        }
+
+        if (!res.eofOk) {
+            res.status = 'CORRUPT_PDF';
+            res.reason = 'PDF header found but the %%EOF trailer marker is missing - file is truncated.';
+            return res;
+        }
+
+        res.passed = true;
+        res.passedFlag = 'Y';
+        res.status = 'PASSED';
+        res.reason = 'Valid PDF ' + (res.pdfVersion ? 'v' + res.pdfVersion + ' ' : '') +
+            '(' + res.sizeBytes + ' bytes).';
+        return res;
+    } catch (e) {
+        res.status = 'ERROR';
+        res.error = String(e && e.message ? e.message : e);
+        res.reason = 'File format check failed: ' + res.error;
+        return res;
+    }
+}
+
+</script>
+<script>
+/* validatePasswordProtection.js */
+/*
+ * Oracle Integration Cloud - AP invoice pre-processing.
+ * Deployable JavaScript library: validatePasswordProtection.js
+ *
+ * Generated from oic-preprocessing/src by build.js - edit the sources, not this file.
+ * Pure ECMAScript 5. No JAR, no require(), no browser or Node APIs.
+ */
+
+/* ---------- core A: base64 + byte helpers (no dependencies) ---------- */
+
+function pp_b64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var lookup = {};
+    var i;
+    for (i = 0; i < chars.length; i++) {
+        lookup[chars.charAt(i)] = i;
+    }
+    var clean = String(b64 === null || b64 === undefined ? '' : b64).replace(/[^A-Za-z0-9+\/]/g, '');
+    var len = clean.length;
+    var bytes = [];
+    var buf = 0;
+    var bits = 0;
+    for (i = 0; i < len; i++) {
+        buf = (buf << 6) | lookup[clean.charAt(i)];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buf >> bits) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+function pp_bytesToLatin1(bytes) {
+    var parts = [];
+    var chunk = [];
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+        chunk.push(String.fromCharCode(bytes[i] & 0xFF));
+        if (chunk.length === 8192) {
+            parts.push(chunk.join(''));
+            chunk = [];
+        }
+    }
+    parts.push(chunk.join(''));
+    return parts.join('');
+}
+
+function pp_isPdf(bytes) {
+    var head = pp_bytesToLatin1(bytes.slice(0, 1024));
+    return head.indexOf('%PDF-') >= 0;
+}
+
+/* ---------- core B: DEFLATE + PDF text extraction (pure JS) ---------- */
+
+var pp_LENS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+    59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+var pp_LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
+    4, 5, 5, 5, 5, 0];
+var pp_DISTS = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+var pp_DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+var pp_CLCIDX = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+function pp_buildHuff(lengths, n) {
+    var counts = [];
+    var offs = [];
+    var symbols = [];
+    var i;
+    for (i = 0; i < 16; i++) {
+        counts[i] = 0;
+        offs[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        counts[lengths[i]]++;
+    }
+    counts[0] = 0;
+    offs[1] = 0;
+    for (i = 1; i < 15; i++) {
+        offs[i + 1] = offs[i] + counts[i];
+    }
+    for (i = 0; i < n; i++) {
+        if (lengths[i]) {
+            symbols[offs[lengths[i]]++] = i;
+        }
+    }
+    return { counts: counts, symbols: symbols };
+}
+
+/* Raw DEFLATE / zlib inflate over bytes[start .. end). Returns array of bytes. */
+function pp_inflate(bytes, start, end) {
+    var pos = start;
+    var bitbuf = 0;
+    var bitcnt = 0;
+    var out = [];
+
+    if (end - start > 2) {
+        var cmf = bytes[start];
+        var flg = bytes[start + 1];
+        if ((cmf & 0x0F) === 8 && (((cmf << 8) + flg) % 31) === 0) {
+            pos = start + 2;
+        }
+    }
+
+    function bits(n) {
+        var v;
+        while (bitcnt < n) {
+            if (pos >= end) {
+                throw new Error('unexpected end of deflate stream');
+            }
+            bitbuf |= bytes[pos++] << bitcnt;
+            bitcnt += 8;
+        }
+        v = bitbuf & ((1 << n) - 1);
+        bitbuf >>>= n;
+        bitcnt -= n;
+        return v;
+    }
+
+    function decode(h) {
+        var code = 0;
+        var first = 0;
+        var index = 0;
+        var len;
+        var count;
+        for (len = 1; len <= 15; len++) {
+            code |= bits(1);
+            count = h.counts[len];
+            if (code - first < count) {
+                return h.symbols[index + (code - first)];
+            }
+            index += count;
+            first += count;
+            first <<= 1;
+            code <<= 1;
+        }
+        throw new Error('invalid huffman code');
+    }
+
+    function codes(lc, dc) {
+        var sym;
+        var len;
+        var dist;
+        var from;
+        var i;
+        for (;;) {
+            sym = decode(lc);
+            if (sym < 256) {
+                out.push(sym);
+            } else if (sym === 256) {
+                return;
+            } else {
+                sym -= 257;
+                if (sym >= 29) {
+                    throw new Error('invalid length code');
+                }
+                len = pp_LENS[sym] + bits(pp_LEXT[sym]);
+                sym = decode(dc);
+                if (sym >= 30) {
+                    throw new Error('invalid distance code');
+                }
+                dist = pp_DISTS[sym] + bits(pp_DEXT[sym]);
+                from = out.length - dist;
+                if (from < 0) {
+                    throw new Error('distance before start');
+                }
+                for (i = 0; i < len; i++) {
+                    out.push(out[from + i]);
+                }
+            }
+        }
+    }
+
+    var fixedL = null;
+    var fixedD = null;
+    function buildFixed() {
+        var lengths = [];
+        var i;
+        for (i = 0; i < 144; i++) { lengths[i] = 8; }
+        for (i = 144; i < 256; i++) { lengths[i] = 9; }
+        for (i = 256; i < 280; i++) { lengths[i] = 7; }
+        for (i = 280; i < 288; i++) { lengths[i] = 8; }
+        fixedL = pp_buildHuff(lengths, 288);
+        var dl = [];
+        for (i = 0; i < 30; i++) { dl[i] = 5; }
+        fixedD = pp_buildHuff(dl, 30);
+    }
+
+    var last;
+    var type;
+    do {
+        last = bits(1);
+        type = bits(2);
+        if (type === 0) {
+            bitbuf = 0;
+            bitcnt = 0;
+            if (pos + 4 > end) {
+                throw new Error('unexpected end of stored block');
+            }
+            var slen = bytes[pos] | (bytes[pos + 1] << 8);
+            pos += 4;
+            if (pos + slen > end) {
+                throw new Error('stored block overruns stream');
+            }
+            for (var si = 0; si < slen; si++) {
+                out.push(bytes[pos++]);
+            }
+        } else if (type === 1) {
+            if (fixedL === null) {
+                buildFixed();
+            }
+            codes(fixedL, fixedD);
+        } else if (type === 2) {
+            var nlen = bits(5) + 257;
+            var ndist = bits(5) + 1;
+            var ncode = bits(4) + 4;
+            var lengths = [];
+            var i;
+            for (i = 0; i < 320; i++) {
+                lengths[i] = 0;
+            }
+            for (i = 0; i < ncode; i++) {
+                lengths[pp_CLCIDX[i]] = bits(3);
+            }
+            var lencode = pp_buildHuff(lengths, 19);
+            i = 0;
+            while (i < nlen + ndist) {
+                var sym = decode(lencode);
+                var val;
+                var rep;
+                if (sym < 16) {
+                    lengths[i++] = sym;
+                } else {
+                    if (sym === 16) {
+                        if (i === 0) {
+                            throw new Error('no previous length to repeat');
+                        }
+                        val = lengths[i - 1];
+                        rep = 3 + bits(2);
+                    } else if (sym === 17) {
+                        val = 0;
+                        rep = 3 + bits(3);
+                    } else {
+                        val = 0;
+                        rep = 11 + bits(7);
+                    }
+                    while (rep--) {
+                        lengths[i++] = val;
+                    }
+                }
+            }
+            var litLens = lengths.slice(0, nlen);
+            var distLens = lengths.slice(nlen, nlen + ndist);
+            codes(pp_buildHuff(litLens, nlen), pp_buildHuff(distLens, ndist));
+        } else {
+            throw new Error('invalid block type');
+        }
+    } while (!last);
+
+    return out;
+}
+
+/* Turn one decoded content stream into plain text. */
+function pp_contentText(c) {
+    var out = [];
+    var i = 0;
+    var n = c.length;
+    var ch;
+    while (i < n) {
+        ch = c.charAt(i);
+        if (ch === '(') {
+            var depth = 1;
+            var buf = '';
+            i++;
+            while (i < n && depth > 0) {
+                var d = c.charAt(i);
+                if (d === '\\') {
+                    var e = c.charAt(i + 1);
+                    if (e >= '0' && e <= '7') {
+                        var oct = '';
+                        var k = i + 1;
+                        while (k < n && oct.length < 3 && c.charAt(k) >= '0' && c.charAt(k) <= '7') {
+                            oct += c.charAt(k);
+                            k++;
+                        }
+                        buf += String.fromCharCode(parseInt(oct, 8));
+                        i = k;
+                        continue;
+                    }
+                    if (e === 'n') { buf += '\n'; }
+                    else if (e === 'r') { buf += '\n'; }
+                    else if (e === 't') { buf += ' '; }
+                    else if (e === 'b' || e === 'f') { buf += ' '; }
+                    else if (e === '\n' || e === '\r') { /* line continuation */ }
+                    else { buf += e; }
+                    i += 2;
+                    continue;
+                }
+                if (d === '(') { depth++; buf += d; i++; continue; }
+                if (d === ')') { depth--; if (depth > 0) { buf += d; } i++; continue; }
+                buf += d;
+                i++;
+            }
+            out.push(buf);
+            continue;
+        }
+        if (ch === '<' && c.charAt(i + 1) !== '<') {
+            var endHex = c.indexOf('>', i);
+            if (endHex < 0) { break; }
+            var hex = c.substring(i + 1, endHex).replace(/[^0-9A-Fa-f]/g, '');
+            var hbuf = '';
+            for (var j = 0; j + 1 < hex.length; j += 2) {
+                hbuf += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
+            }
+            out.push(hbuf);
+            i = endHex + 1;
+            continue;
+        }
+        if (ch === 'T') {
+            var nx = c.charAt(i + 1);
+            if (nx === 'd' || nx === 'D' || nx === '*') {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+        }
+        if (ch === 'E' && c.charAt(i + 1) === 'T') {
+            out.push('\n');
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return out.join('');
+}
+
+function pp_normalise(t) {
+    return String(t)
+        .replace(/\u0000/g, '')
+        .replace(/[\r\f\u000b]/g, '\n')
+        .replace(/[ \t\u00a0]+/g, ' ')
+        .replace(/ *\n+ */g, '\n')
+        .replace(/^\n+|\n+$/g, '');
+}
+
+/* Extract all text-layer text from a PDF held as a byte array. */
+function pp_extractText(bytes) {
+    var s = pp_bytesToLatin1(bytes);
+    var chunks = [];
+    var idx = 0;
+    var guard = 0;
+    while (guard++ < 20000) {
+        var st = s.indexOf('stream', idx);
+        if (st < 0) { break; }
+        if (s.substring(st - 3, st) === 'end') {
+            idx = st + 6;
+            continue;
+        }
+        var dictStart = s.lastIndexOf('<<', st);
+        var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+        var dataStart = st + 6;
+        if (s.charAt(dataStart) === '\r') { dataStart++; }
+        if (s.charAt(dataStart) === '\n') { dataStart++; }
+        var dataEnd = s.indexOf('endstream', dataStart);
+        if (dataEnd < 0) { break; }
+        idx = dataEnd + 9;
+
+        if (dict.indexOf('/Image') >= 0 || dict.indexOf('/DCTDecode') >= 0 ||
+            dict.indexOf('/JPXDecode') >= 0 || dict.indexOf('/CCITTFaxDecode') >= 0 ||
+            dict.indexOf('/JBIG2Decode') >= 0) {
+            continue;
+        }
+
+        if (dict.indexOf('/FlateDecode') < 0) {
+            var plain = s.substring(dataStart, dataEnd);
+            if (plain.indexOf('Tj') >= 0 || plain.indexOf('TJ') >= 0) {
+                chunks.push(pp_contentText(plain));
+            }
+            continue;
+        }
+
+        try {
+            var raw = pp_inflate(bytes, dataStart, dataEnd);
+            var rs = pp_bytesToLatin1(raw);
+            if (rs.indexOf('Tj') >= 0 || rs.indexOf('TJ') >= 0) {
+                chunks.push(pp_contentText(rs));
+            }
+        } catch (e) {
+            /* encrypted, damaged, or an unsupported filter chain: skip */
+        }
+    }
+    return pp_normalise(chunks.join('\n'));
+}
+
+/* Whitespace-free lowercase form, for keyword matching on PDFs that split glyphs. */
+function pp_compact(t) {
+    return String(t).toLowerCase().replace(/\s+/g, '');
+}
+
+/* Parse "1,234.56" / "1.234,56" / "(120.00)" / "-45" into a number, or null. */
+function pp_parseAmount(raw) {
+    var s = String(raw).replace(/[^0-9.,()\-]/g, '');
+    if (!s) { return null; }
+    var neg = (s.indexOf('(') >= 0 && s.indexOf(')') >= 0) || s.indexOf('-') === 0;
+    s = s.replace(/[()\-]/g, '');
+    if (!s) { return null; }
+    var lastDot = s.lastIndexOf('.');
+    var lastCom = s.lastIndexOf(',');
+    var dec = lastDot > lastCom ? lastDot : lastCom;
+    var intPart;
+    var fracPart = '';
+    var tail = s.length - dec - 1;
+    if (dec >= 0 && tail > 0 && tail <= 2) {
+        intPart = s.substring(0, dec).replace(/[.,]/g, '');
+        fracPart = s.substring(dec + 1);
+    } else {
+        intPart = s.replace(/[.,]/g, '');
+    }
+    if (!/^[0-9]*$/.test(intPart) || !/^[0-9]*$/.test(fracPart)) { return null; }
+    if (intPart === '' && fracPart === '') { return null; }
+    var v = parseFloat((intPart === '' ? '0' : intPart) + '.' + (fracPart === '' ? '0' : fracPart));
+    if (isNaN(v)) { return null; }
+    return neg ? -v : v;
+}
+
+/* Resolve text from either a caller-supplied override or the PDF bytes. */
+function pp_resolveText(base64Content, textOverride) {
+    if (textOverride !== null && textOverride !== undefined && String(textOverride).length > 0) {
+        return pp_normalise(String(textOverride));
+    }
+    return pp_extractText(pp_b64ToBytes(base64Content));
+}
+
+/* Exposed so OIC can extract once and pass the text into the later checks. */
+function pp_extractPdfText(base64Content) {
+    var res = { text: '', textLength: 0, hasTextLayer: false, error: '' };
+    try {
+        res.text = pp_extractText(pp_b64ToBytes(base64Content));
+        res.textLength = res.text.length;
+        res.hasTextLayer = res.textLength > 20;
+    } catch (e) {
+        res.error = String(e && e.message ? e.message : e);
+    }
+    return res;
+}
+
+/**
+ * VALIDATION 2 - Password protection detection.
+ *
+ * OIC call signature:
+ *   validatePasswordProtection(base64Content)
+ *
+ * Reject with APEX status "Password Protected" when status === "PASSWORD_PROTECTED".
+ *
+ * How it works: an encrypted PDF carries an /Encrypt entry in its trailer. This
+ * function finds that entry and reads /V (algorithm version), /R (revision) and
+ * /P (permission bitmask) out of the encryption dictionary. It also tries to
+ * inflate the content streams: on an encrypted file every stream fails to
+ * inflate, which is used as a corroborating signal.
+ *
+ * Limitation: distinguishing a user-password PDF (cannot be opened at all) from
+ * an owner-password PDF (opens freely, only permissions are restricted) requires
+ * running RC4/AES against the empty password, which pure JavaScript cannot do
+ * here. Both are reported as PASSWORD_PROTECTED. Both also fail in Document
+ * Understanding, so rejecting both is the safe default - but see
+ * "ownerPasswordLikely" below if you want to let permissions-only files through.
+ */
+function validatePasswordProtection(base64Content) {
+    var res = {
+        validation: 'PASSWORD_PROTECTION',
+        passed: false,
+        passedFlag: 'N',
+        status: 'ERROR',
+        reason: '',
+        encrypted: false,
+        encryptVersion: 0,
+        encryptRevision: 0,
+        permissions: 0,
+        cryptFilter: '',
+        streamsDecoded: 0,
+        ownerPasswordLikely: false,
+        error: ''
+    };
+
+    try {
+        var bytes = pp_b64ToBytes(base64Content);
+        if (bytes.length === 0) {
+            res.status = 'ERROR';
+            res.reason = 'No content supplied.';
+            return res;
+        }
+
+        var s = pp_bytesToLatin1(bytes);
+        var encIdx = s.indexOf('/Encrypt');
+        res.encrypted = encIdx >= 0;
+
+        /* Count how many streams inflate cleanly - zero means the body is encrypted. */
+        var decoded = 0;
+        var idx = 0;
+        var guard = 0;
+        while (guard++ < 500) {
+            var st = s.indexOf('stream', idx);
+            if (st < 0) { break; }
+            if (s.substring(st - 3, st) === 'end') { idx = st + 6; continue; }
+            var dictStart = s.lastIndexOf('<<', st);
+            var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+            var dataStart = st + 6;
+            if (s.charAt(dataStart) === '\r') { dataStart++; }
+            if (s.charAt(dataStart) === '\n') { dataStart++; }
+            var dataEnd = s.indexOf('endstream', dataStart);
+            if (dataEnd < 0) { break; }
+            idx = dataEnd + 9;
+            if (dict.indexOf('/FlateDecode') < 0) { continue; }
+            try {
+                var out = pp_inflate(bytes, dataStart, dataEnd);
+                if (out.length > 0) { decoded++; }
+            } catch (ignored) {
+                /* encrypted or damaged */
+            }
+        }
+        res.streamsDecoded = decoded;
+
+        if (!res.encrypted) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'PASSED';
+            res.reason = 'No /Encrypt dictionary - document is not password protected.';
+            return res;
+        }
+
+        /* Read the encryption dictionary values. In the trailer /Encrypt is almost
+           always an indirect reference ("/Encrypt 9 0 R") pointing at an object
+           earlier in the file, so the reference has to be followed - reading
+           forward from /Encrypt alone lands past the end of the document. */
+        var window = '';
+        var ref = s.substring(encIdx, encIdx + 64).match(/^\/Encrypt\s+(\d+)\s+(\d+)\s+R/);
+        if (ref) {
+            var objRe = new RegExp('(?:^|[^0-9])' + ref[1] + '\\s+' + ref[2] + '\\s+obj');
+            var om = objRe.exec(s);
+            if (om) {
+                var objStart = om.index + om[0].length;
+                window = s.substring(objStart, objStart + 4000);
+            }
+        }
+        if (window === '') {
+            /* inline dictionary, or the referenced object could not be located */
+            window = s.substring(encIdx, encIdx + 4000);
+        }
+        var mv = window.match(/\/V\s+(\d+)/);
+        var mr = window.match(/\/R\s+(\d+)/);
+        var mp = window.match(/\/P\s+(-?\d+)/);
+        var mf = window.match(/\/Filter\s*\/([A-Za-z0-9]+)/);
+        if (mv) { res.encryptVersion = parseInt(mv[1], 10); }
+        if (mr) { res.encryptRevision = parseInt(mr[1], 10); }
+        if (mp) { res.permissions = parseInt(mp[1], 10); }
+        if (mf) { res.cryptFilter = mf[1]; }
+
+        /* If some streams still inflated, the body is not really encrypted, which
+           in practice means an owner-password / permissions-only file. */
+        res.ownerPasswordLikely = decoded > 0;
+
+        res.status = 'PASSWORD_PROTECTED';
+        res.reason = 'PDF is encrypted (/Encrypt present' +
+            (res.cryptFilter ? ', filter ' + res.cryptFilter : '') +
+            (res.encryptRevision ? ', R' + res.encryptRevision : '') +
+            '). ' + decoded + ' of the content streams could be read.';
+        return res;
+    } catch (e) {
+        res.status = 'ERROR';
+        res.error = String(e && e.message ? e.message : e);
+        res.reason = 'Password protection check failed: ' + res.error;
+        return res;
+    }
+}
+
+</script>
+<script>
+/* validateZeroValue.js */
+/*
+ * Oracle Integration Cloud - AP invoice pre-processing.
+ * Deployable JavaScript library: validateZeroValue.js
+ *
+ * Generated from oic-preprocessing/src by build.js - edit the sources, not this file.
+ * Pure ECMAScript 5. No JAR, no require(), no browser or Node APIs.
+ */
+
+/* ---------- core A: base64 + byte helpers (no dependencies) ---------- */
+
+function zv_b64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var lookup = {};
+    var i;
+    for (i = 0; i < chars.length; i++) {
+        lookup[chars.charAt(i)] = i;
+    }
+    var clean = String(b64 === null || b64 === undefined ? '' : b64).replace(/[^A-Za-z0-9+\/]/g, '');
+    var len = clean.length;
+    var bytes = [];
+    var buf = 0;
+    var bits = 0;
+    for (i = 0; i < len; i++) {
+        buf = (buf << 6) | lookup[clean.charAt(i)];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buf >> bits) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+function zv_bytesToLatin1(bytes) {
+    var parts = [];
+    var chunk = [];
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+        chunk.push(String.fromCharCode(bytes[i] & 0xFF));
+        if (chunk.length === 8192) {
+            parts.push(chunk.join(''));
+            chunk = [];
+        }
+    }
+    parts.push(chunk.join(''));
+    return parts.join('');
+}
+
+function zv_isPdf(bytes) {
+    var head = zv_bytesToLatin1(bytes.slice(0, 1024));
+    return head.indexOf('%PDF-') >= 0;
+}
+
+/* ---------- core B: DEFLATE + PDF text extraction (pure JS) ---------- */
+
+var zv_LENS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+    59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+var zv_LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
+    4, 5, 5, 5, 5, 0];
+var zv_DISTS = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+var zv_DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+var zv_CLCIDX = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+function zv_buildHuff(lengths, n) {
+    var counts = [];
+    var offs = [];
+    var symbols = [];
+    var i;
+    for (i = 0; i < 16; i++) {
+        counts[i] = 0;
+        offs[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        counts[lengths[i]]++;
+    }
+    counts[0] = 0;
+    offs[1] = 0;
+    for (i = 1; i < 15; i++) {
+        offs[i + 1] = offs[i] + counts[i];
+    }
+    for (i = 0; i < n; i++) {
+        if (lengths[i]) {
+            symbols[offs[lengths[i]]++] = i;
+        }
+    }
+    return { counts: counts, symbols: symbols };
+}
+
+/* Raw DEFLATE / zlib inflate over bytes[start .. end). Returns array of bytes. */
+function zv_inflate(bytes, start, end) {
+    var pos = start;
+    var bitbuf = 0;
+    var bitcnt = 0;
+    var out = [];
+
+    if (end - start > 2) {
+        var cmf = bytes[start];
+        var flg = bytes[start + 1];
+        if ((cmf & 0x0F) === 8 && (((cmf << 8) + flg) % 31) === 0) {
+            pos = start + 2;
+        }
+    }
+
+    function bits(n) {
+        var v;
+        while (bitcnt < n) {
+            if (pos >= end) {
+                throw new Error('unexpected end of deflate stream');
+            }
+            bitbuf |= bytes[pos++] << bitcnt;
+            bitcnt += 8;
+        }
+        v = bitbuf & ((1 << n) - 1);
+        bitbuf >>>= n;
+        bitcnt -= n;
+        return v;
+    }
+
+    function decode(h) {
+        var code = 0;
+        var first = 0;
+        var index = 0;
+        var len;
+        var count;
+        for (len = 1; len <= 15; len++) {
+            code |= bits(1);
+            count = h.counts[len];
+            if (code - first < count) {
+                return h.symbols[index + (code - first)];
+            }
+            index += count;
+            first += count;
+            first <<= 1;
+            code <<= 1;
+        }
+        throw new Error('invalid huffman code');
+    }
+
+    function codes(lc, dc) {
+        var sym;
+        var len;
+        var dist;
+        var from;
+        var i;
+        for (;;) {
+            sym = decode(lc);
+            if (sym < 256) {
+                out.push(sym);
+            } else if (sym === 256) {
+                return;
+            } else {
+                sym -= 257;
+                if (sym >= 29) {
+                    throw new Error('invalid length code');
+                }
+                len = zv_LENS[sym] + bits(zv_LEXT[sym]);
+                sym = decode(dc);
+                if (sym >= 30) {
+                    throw new Error('invalid distance code');
+                }
+                dist = zv_DISTS[sym] + bits(zv_DEXT[sym]);
+                from = out.length - dist;
+                if (from < 0) {
+                    throw new Error('distance before start');
+                }
+                for (i = 0; i < len; i++) {
+                    out.push(out[from + i]);
+                }
+            }
+        }
+    }
+
+    var fixedL = null;
+    var fixedD = null;
+    function buildFixed() {
+        var lengths = [];
+        var i;
+        for (i = 0; i < 144; i++) { lengths[i] = 8; }
+        for (i = 144; i < 256; i++) { lengths[i] = 9; }
+        for (i = 256; i < 280; i++) { lengths[i] = 7; }
+        for (i = 280; i < 288; i++) { lengths[i] = 8; }
+        fixedL = zv_buildHuff(lengths, 288);
+        var dl = [];
+        for (i = 0; i < 30; i++) { dl[i] = 5; }
+        fixedD = zv_buildHuff(dl, 30);
+    }
+
+    var last;
+    var type;
+    do {
+        last = bits(1);
+        type = bits(2);
+        if (type === 0) {
+            bitbuf = 0;
+            bitcnt = 0;
+            if (pos + 4 > end) {
+                throw new Error('unexpected end of stored block');
+            }
+            var slen = bytes[pos] | (bytes[pos + 1] << 8);
+            pos += 4;
+            if (pos + slen > end) {
+                throw new Error('stored block overruns stream');
+            }
+            for (var si = 0; si < slen; si++) {
+                out.push(bytes[pos++]);
+            }
+        } else if (type === 1) {
+            if (fixedL === null) {
+                buildFixed();
+            }
+            codes(fixedL, fixedD);
+        } else if (type === 2) {
+            var nlen = bits(5) + 257;
+            var ndist = bits(5) + 1;
+            var ncode = bits(4) + 4;
+            var lengths = [];
+            var i;
+            for (i = 0; i < 320; i++) {
+                lengths[i] = 0;
+            }
+            for (i = 0; i < ncode; i++) {
+                lengths[zv_CLCIDX[i]] = bits(3);
+            }
+            var lencode = zv_buildHuff(lengths, 19);
+            i = 0;
+            while (i < nlen + ndist) {
+                var sym = decode(lencode);
+                var val;
+                var rep;
+                if (sym < 16) {
+                    lengths[i++] = sym;
+                } else {
+                    if (sym === 16) {
+                        if (i === 0) {
+                            throw new Error('no previous length to repeat');
+                        }
+                        val = lengths[i - 1];
+                        rep = 3 + bits(2);
+                    } else if (sym === 17) {
+                        val = 0;
+                        rep = 3 + bits(3);
+                    } else {
+                        val = 0;
+                        rep = 11 + bits(7);
+                    }
+                    while (rep--) {
+                        lengths[i++] = val;
+                    }
+                }
+            }
+            var litLens = lengths.slice(0, nlen);
+            var distLens = lengths.slice(nlen, nlen + ndist);
+            codes(zv_buildHuff(litLens, nlen), zv_buildHuff(distLens, ndist));
+        } else {
+            throw new Error('invalid block type');
+        }
+    } while (!last);
+
+    return out;
+}
+
+/* Turn one decoded content stream into plain text. */
+function zv_contentText(c) {
+    var out = [];
+    var i = 0;
+    var n = c.length;
+    var ch;
+    while (i < n) {
+        ch = c.charAt(i);
+        if (ch === '(') {
+            var depth = 1;
+            var buf = '';
+            i++;
+            while (i < n && depth > 0) {
+                var d = c.charAt(i);
+                if (d === '\\') {
+                    var e = c.charAt(i + 1);
+                    if (e >= '0' && e <= '7') {
+                        var oct = '';
+                        var k = i + 1;
+                        while (k < n && oct.length < 3 && c.charAt(k) >= '0' && c.charAt(k) <= '7') {
+                            oct += c.charAt(k);
+                            k++;
+                        }
+                        buf += String.fromCharCode(parseInt(oct, 8));
+                        i = k;
+                        continue;
+                    }
+                    if (e === 'n') { buf += '\n'; }
+                    else if (e === 'r') { buf += '\n'; }
+                    else if (e === 't') { buf += ' '; }
+                    else if (e === 'b' || e === 'f') { buf += ' '; }
+                    else if (e === '\n' || e === '\r') { /* line continuation */ }
+                    else { buf += e; }
+                    i += 2;
+                    continue;
+                }
+                if (d === '(') { depth++; buf += d; i++; continue; }
+                if (d === ')') { depth--; if (depth > 0) { buf += d; } i++; continue; }
+                buf += d;
+                i++;
+            }
+            out.push(buf);
+            continue;
+        }
+        if (ch === '<' && c.charAt(i + 1) !== '<') {
+            var endHex = c.indexOf('>', i);
+            if (endHex < 0) { break; }
+            var hex = c.substring(i + 1, endHex).replace(/[^0-9A-Fa-f]/g, '');
+            var hbuf = '';
+            for (var j = 0; j + 1 < hex.length; j += 2) {
+                hbuf += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
+            }
+            out.push(hbuf);
+            i = endHex + 1;
+            continue;
+        }
+        if (ch === 'T') {
+            var nx = c.charAt(i + 1);
+            if (nx === 'd' || nx === 'D' || nx === '*') {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+        }
+        if (ch === 'E' && c.charAt(i + 1) === 'T') {
+            out.push('\n');
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return out.join('');
+}
+
+function zv_normalise(t) {
+    return String(t)
+        .replace(/\u0000/g, '')
+        .replace(/[\r\f\u000b]/g, '\n')
+        .replace(/[ \t\u00a0]+/g, ' ')
+        .replace(/ *\n+ */g, '\n')
+        .replace(/^\n+|\n+$/g, '');
+}
+
+/* Extract all text-layer text from a PDF held as a byte array. */
+function zv_extractText(bytes) {
+    var s = zv_bytesToLatin1(bytes);
+    var chunks = [];
+    var idx = 0;
+    var guard = 0;
+    while (guard++ < 20000) {
+        var st = s.indexOf('stream', idx);
+        if (st < 0) { break; }
+        if (s.substring(st - 3, st) === 'end') {
+            idx = st + 6;
+            continue;
+        }
+        var dictStart = s.lastIndexOf('<<', st);
+        var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+        var dataStart = st + 6;
+        if (s.charAt(dataStart) === '\r') { dataStart++; }
+        if (s.charAt(dataStart) === '\n') { dataStart++; }
+        var dataEnd = s.indexOf('endstream', dataStart);
+        if (dataEnd < 0) { break; }
+        idx = dataEnd + 9;
+
+        if (dict.indexOf('/Image') >= 0 || dict.indexOf('/DCTDecode') >= 0 ||
+            dict.indexOf('/JPXDecode') >= 0 || dict.indexOf('/CCITTFaxDecode') >= 0 ||
+            dict.indexOf('/JBIG2Decode') >= 0) {
+            continue;
+        }
+
+        if (dict.indexOf('/FlateDecode') < 0) {
+            var plain = s.substring(dataStart, dataEnd);
+            if (plain.indexOf('Tj') >= 0 || plain.indexOf('TJ') >= 0) {
+                chunks.push(zv_contentText(plain));
+            }
+            continue;
+        }
+
+        try {
+            var raw = zv_inflate(bytes, dataStart, dataEnd);
+            var rs = zv_bytesToLatin1(raw);
+            if (rs.indexOf('Tj') >= 0 || rs.indexOf('TJ') >= 0) {
+                chunks.push(zv_contentText(rs));
+            }
+        } catch (e) {
+            /* encrypted, damaged, or an unsupported filter chain: skip */
+        }
+    }
+    return zv_normalise(chunks.join('\n'));
+}
+
+/* Whitespace-free lowercase form, for keyword matching on PDFs that split glyphs. */
+function zv_compact(t) {
+    return String(t).toLowerCase().replace(/\s+/g, '');
+}
+
+/* Parse "1,234.56" / "1.234,56" / "(120.00)" / "-45" into a number, or null. */
+function zv_parseAmount(raw) {
+    var s = String(raw).replace(/[^0-9.,()\-]/g, '');
+    if (!s) { return null; }
+    var neg = (s.indexOf('(') >= 0 && s.indexOf(')') >= 0) || s.indexOf('-') === 0;
+    s = s.replace(/[()\-]/g, '');
+    if (!s) { return null; }
+    var lastDot = s.lastIndexOf('.');
+    var lastCom = s.lastIndexOf(',');
+    var dec = lastDot > lastCom ? lastDot : lastCom;
+    var intPart;
+    var fracPart = '';
+    var tail = s.length - dec - 1;
+    if (dec >= 0 && tail > 0 && tail <= 2) {
+        intPart = s.substring(0, dec).replace(/[.,]/g, '');
+        fracPart = s.substring(dec + 1);
+    } else {
+        intPart = s.replace(/[.,]/g, '');
+    }
+    if (!/^[0-9]*$/.test(intPart) || !/^[0-9]*$/.test(fracPart)) { return null; }
+    if (intPart === '' && fracPart === '') { return null; }
+    var v = parseFloat((intPart === '' ? '0' : intPart) + '.' + (fracPart === '' ? '0' : fracPart));
+    if (isNaN(v)) { return null; }
+    return neg ? -v : v;
+}
+
+/* Resolve text from either a caller-supplied override or the PDF bytes. */
+function zv_resolveText(base64Content, textOverride) {
+    if (textOverride !== null && textOverride !== undefined && String(textOverride).length > 0) {
+        return zv_normalise(String(textOverride));
+    }
+    return zv_extractText(zv_b64ToBytes(base64Content));
+}
+
+/* Exposed so OIC can extract once and pass the text into the later checks. */
+function zv_extractPdfText(base64Content) {
+    var res = { text: '', textLength: 0, hasTextLayer: false, error: '' };
+    try {
+        res.text = zv_extractText(zv_b64ToBytes(base64Content));
+        res.textLength = res.text.length;
+        res.hasTextLayer = res.textLength > 20;
+    } catch (e) {
+        res.error = String(e && e.message ? e.message : e);
+    }
+    return res;
+}
+
+/**
+ * VALIDATION 3 - Zero-value invoice check.
+ *
+ * OIC call signature:
+ *   validateZeroValue(base64Content, textOverride, zeroToleranceStr)
+ *
+ * base64Content    - the PDF as base64. Ignored when textOverride is supplied.
+ * textOverride     - optional. Text from a previous zv_extractPdfText call, so the
+ *                    PDF is only parsed once across validations 3-6. Pass "" to skip.
+ * zeroToleranceStr - optional. Absolute value at or below which the total counts as
+ *                    zero. Pass "" for the default of 0.
+ *
+ * Reject when status === "ZERO_VALUE".
+ * status === "TOTAL_NOT_FOUND" means no total could be read (usually a scanned
+ * image PDF). That returns passed = true on purpose: the document is sent on to
+ * Document Understanding rather than being rejected on missing evidence.
+ */
+
+var ZV_LABELS = [
+    { name: 'GROSS_TOTAL', re: /(gross\s*(?:total|amount|value))/i },
+    { name: 'BALANCE_DUE', re: /(balance\s*due|amount\s*due|total\s*due|amount\s*payable|total\s*payable|please\s*pay)/i },
+    { name: 'INVOICE_TOTAL', re: /(invoice\s*total|grand\s*total|total\s*inc(?:l|luding)?[^\n]{0,12}(?:vat|tax|gst)?|total\s*\(?inc)/i },
+    { name: 'NET_TOTAL', re: /(net\s*(?:total|amount)|sub\s*-?\s*total)/i },
+    { name: 'TOTAL', re: /(^|\s)total(\s|:|$)/i }
+];
+
+/* Labels that look like totals but count things, not money. */
+var ZV_NOISE = /(qty|quantity|item|line|page|unit|weight|hours|count|no\.)/i;
+
+var ZV_NUMBER = /\(?-?(?:[0-9]{1,3}(?:[.,][0-9]{3})*|[0-9]+)(?:[.,][0-9]{1,2})?\)?/g;
+
+function zv_amountsOnLine(line) {
+    var stripped = line.replace(/[A-Za-z£$€¥]+/g, ' ');
+    var found = stripped.match(ZV_NUMBER);
+    var vals = [];
+    if (!found) { return vals; }
+    for (var i = 0; i < found.length; i++) {
+        var v = zv_parseAmount(found[i]);
+        if (v !== null) { vals.push(v); }
+    }
+    return vals;
+}
+
+function zv_findTotal(lines) {
+    var i;
+    var l;
+    for (var p = 0; p < ZV_LABELS.length; p++) {
+        var label = ZV_LABELS[p];
+        /* scan bottom-up: invoice totals live at the foot of the document */
+        for (i = lines.length - 1; i >= 0; i--) {
+            l = lines[i];
+            if (!label.re.test(l)) { continue; }
+            if (ZV_NOISE.test(l)) { continue; }
+            var after = l.replace(label.re, ' ');
+            var vals = zv_amountsOnLine(after);
+            if (vals.length > 0) {
+                return { label: label.name, matchedLine: l, value: vals[vals.length - 1] };
+            }
+            /* label and figure split across two lines */
+            if (i + 1 < lines.length) {
+                var next = zv_amountsOnLine(lines[i + 1]);
+                if (next.length > 0) {
+                    return {
+                        label: label.name,
+                        matchedLine: l + ' | ' + lines[i + 1],
+                        value: next[next.length - 1]
+                    };
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function validateZeroValue(base64Content, textOverride, zeroToleranceStr) {
+    var res = {
+        validation: 'ZERO_VALUE',
+        passed: false,
+        passedFlag: 'N',
+        status: 'ERROR',
+        reason: '',
+        grossTotal: 0,
+        totalFound: false,
+        matchedLabel: '',
+        matchedLine: '',
+        hasTextLayer: false,
+        error: ''
+    };
+
+    try {
+        var tolerance = 0;
+        if (zeroToleranceStr !== null && zeroToleranceStr !== undefined &&
+            String(zeroToleranceStr).length > 0) {
+            var t = parseFloat(zeroToleranceStr);
+            if (!isNaN(t)) { tolerance = Math.abs(t); }
+        }
+
+        var text = zv_resolveText(base64Content, textOverride);
+        res.hasTextLayer = text.length > 20;
+
+        if (!res.hasTextLayer) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'TOTAL_NOT_FOUND';
+            res.reason = 'No text layer found (scanned or image-only PDF) - gross total ' +
+                'cannot be read here. Sending to Document Understanding.';
+            return res;
+        }
+
+        var hit = zv_findTotal(text.split('\n'));
+        if (hit === null) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'TOTAL_NOT_FOUND';
+            res.reason = 'Text layer present but no recognisable total label was found. ' +
+                'Sending to Document Understanding.';
+            return res;
+        }
+
+        res.totalFound = true;
+        res.grossTotal = hit.value;
+        res.matchedLabel = hit.label;
+        res.matchedLine = hit.matchedLine.length > 200
+            ? hit.matchedLine.substring(0, 200)
+            : hit.matchedLine;
+
+        if (Math.abs(hit.value) <= tolerance) {
+            res.status = 'ZERO_VALUE';
+            res.reason = 'Gross total is ' + hit.value + ' (matched on "' + hit.label +
+                '") - zero-value invoice.';
+            return res;
+        }
+
+        res.passed = true;
+        res.passedFlag = 'Y';
+        res.status = 'PASSED';
+        res.reason = 'Gross total is ' + hit.value + ' (matched on "' + hit.label + '").';
+        return res;
+    } catch (e) {
+        res.status = 'ERROR';
+        res.error = String(e && e.message ? e.message : e);
+        res.reason = 'Zero-value check failed: ' + res.error;
+        return res;
+    }
+}
+
+</script>
+<script>
+/* classifyDocument.js */
+/*
+ * Oracle Integration Cloud - AP invoice pre-processing.
+ * Deployable JavaScript library: classifyDocument.js
+ *
+ * Generated from oic-preprocessing/src by build.js - edit the sources, not this file.
+ * Pure ECMAScript 5. No JAR, no require(), no browser or Node APIs.
+ */
+
+/* ---------- core A: base64 + byte helpers (no dependencies) ---------- */
+
+function dc_b64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var lookup = {};
+    var i;
+    for (i = 0; i < chars.length; i++) {
+        lookup[chars.charAt(i)] = i;
+    }
+    var clean = String(b64 === null || b64 === undefined ? '' : b64).replace(/[^A-Za-z0-9+\/]/g, '');
+    var len = clean.length;
+    var bytes = [];
+    var buf = 0;
+    var bits = 0;
+    for (i = 0; i < len; i++) {
+        buf = (buf << 6) | lookup[clean.charAt(i)];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buf >> bits) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+function dc_bytesToLatin1(bytes) {
+    var parts = [];
+    var chunk = [];
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+        chunk.push(String.fromCharCode(bytes[i] & 0xFF));
+        if (chunk.length === 8192) {
+            parts.push(chunk.join(''));
+            chunk = [];
+        }
+    }
+    parts.push(chunk.join(''));
+    return parts.join('');
+}
+
+function dc_isPdf(bytes) {
+    var head = dc_bytesToLatin1(bytes.slice(0, 1024));
+    return head.indexOf('%PDF-') >= 0;
+}
+
+/* ---------- core B: DEFLATE + PDF text extraction (pure JS) ---------- */
+
+var dc_LENS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+    59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+var dc_LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
+    4, 5, 5, 5, 5, 0];
+var dc_DISTS = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+var dc_DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+var dc_CLCIDX = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+function dc_buildHuff(lengths, n) {
+    var counts = [];
+    var offs = [];
+    var symbols = [];
+    var i;
+    for (i = 0; i < 16; i++) {
+        counts[i] = 0;
+        offs[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        counts[lengths[i]]++;
+    }
+    counts[0] = 0;
+    offs[1] = 0;
+    for (i = 1; i < 15; i++) {
+        offs[i + 1] = offs[i] + counts[i];
+    }
+    for (i = 0; i < n; i++) {
+        if (lengths[i]) {
+            symbols[offs[lengths[i]]++] = i;
+        }
+    }
+    return { counts: counts, symbols: symbols };
+}
+
+/* Raw DEFLATE / zlib inflate over bytes[start .. end). Returns array of bytes. */
+function dc_inflate(bytes, start, end) {
+    var pos = start;
+    var bitbuf = 0;
+    var bitcnt = 0;
+    var out = [];
+
+    if (end - start > 2) {
+        var cmf = bytes[start];
+        var flg = bytes[start + 1];
+        if ((cmf & 0x0F) === 8 && (((cmf << 8) + flg) % 31) === 0) {
+            pos = start + 2;
+        }
+    }
+
+    function bits(n) {
+        var v;
+        while (bitcnt < n) {
+            if (pos >= end) {
+                throw new Error('unexpected end of deflate stream');
+            }
+            bitbuf |= bytes[pos++] << bitcnt;
+            bitcnt += 8;
+        }
+        v = bitbuf & ((1 << n) - 1);
+        bitbuf >>>= n;
+        bitcnt -= n;
+        return v;
+    }
+
+    function decode(h) {
+        var code = 0;
+        var first = 0;
+        var index = 0;
+        var len;
+        var count;
+        for (len = 1; len <= 15; len++) {
+            code |= bits(1);
+            count = h.counts[len];
+            if (code - first < count) {
+                return h.symbols[index + (code - first)];
+            }
+            index += count;
+            first += count;
+            first <<= 1;
+            code <<= 1;
+        }
+        throw new Error('invalid huffman code');
+    }
+
+    function codes(lc, dc) {
+        var sym;
+        var len;
+        var dist;
+        var from;
+        var i;
+        for (;;) {
+            sym = decode(lc);
+            if (sym < 256) {
+                out.push(sym);
+            } else if (sym === 256) {
+                return;
+            } else {
+                sym -= 257;
+                if (sym >= 29) {
+                    throw new Error('invalid length code');
+                }
+                len = dc_LENS[sym] + bits(dc_LEXT[sym]);
+                sym = decode(dc);
+                if (sym >= 30) {
+                    throw new Error('invalid distance code');
+                }
+                dist = dc_DISTS[sym] + bits(dc_DEXT[sym]);
+                from = out.length - dist;
+                if (from < 0) {
+                    throw new Error('distance before start');
+                }
+                for (i = 0; i < len; i++) {
+                    out.push(out[from + i]);
+                }
+            }
+        }
+    }
+
+    var fixedL = null;
+    var fixedD = null;
+    function buildFixed() {
+        var lengths = [];
+        var i;
+        for (i = 0; i < 144; i++) { lengths[i] = 8; }
+        for (i = 144; i < 256; i++) { lengths[i] = 9; }
+        for (i = 256; i < 280; i++) { lengths[i] = 7; }
+        for (i = 280; i < 288; i++) { lengths[i] = 8; }
+        fixedL = dc_buildHuff(lengths, 288);
+        var dl = [];
+        for (i = 0; i < 30; i++) { dl[i] = 5; }
+        fixedD = dc_buildHuff(dl, 30);
+    }
+
+    var last;
+    var type;
+    do {
+        last = bits(1);
+        type = bits(2);
+        if (type === 0) {
+            bitbuf = 0;
+            bitcnt = 0;
+            if (pos + 4 > end) {
+                throw new Error('unexpected end of stored block');
+            }
+            var slen = bytes[pos] | (bytes[pos + 1] << 8);
+            pos += 4;
+            if (pos + slen > end) {
+                throw new Error('stored block overruns stream');
+            }
+            for (var si = 0; si < slen; si++) {
+                out.push(bytes[pos++]);
+            }
+        } else if (type === 1) {
+            if (fixedL === null) {
+                buildFixed();
+            }
+            codes(fixedL, fixedD);
+        } else if (type === 2) {
+            var nlen = bits(5) + 257;
+            var ndist = bits(5) + 1;
+            var ncode = bits(4) + 4;
+            var lengths = [];
+            var i;
+            for (i = 0; i < 320; i++) {
+                lengths[i] = 0;
+            }
+            for (i = 0; i < ncode; i++) {
+                lengths[dc_CLCIDX[i]] = bits(3);
+            }
+            var lencode = dc_buildHuff(lengths, 19);
+            i = 0;
+            while (i < nlen + ndist) {
+                var sym = decode(lencode);
+                var val;
+                var rep;
+                if (sym < 16) {
+                    lengths[i++] = sym;
+                } else {
+                    if (sym === 16) {
+                        if (i === 0) {
+                            throw new Error('no previous length to repeat');
+                        }
+                        val = lengths[i - 1];
+                        rep = 3 + bits(2);
+                    } else if (sym === 17) {
+                        val = 0;
+                        rep = 3 + bits(3);
+                    } else {
+                        val = 0;
+                        rep = 11 + bits(7);
+                    }
+                    while (rep--) {
+                        lengths[i++] = val;
+                    }
+                }
+            }
+            var litLens = lengths.slice(0, nlen);
+            var distLens = lengths.slice(nlen, nlen + ndist);
+            codes(dc_buildHuff(litLens, nlen), dc_buildHuff(distLens, ndist));
+        } else {
+            throw new Error('invalid block type');
+        }
+    } while (!last);
+
+    return out;
+}
+
+/* Turn one decoded content stream into plain text. */
+function dc_contentText(c) {
+    var out = [];
+    var i = 0;
+    var n = c.length;
+    var ch;
+    while (i < n) {
+        ch = c.charAt(i);
+        if (ch === '(') {
+            var depth = 1;
+            var buf = '';
+            i++;
+            while (i < n && depth > 0) {
+                var d = c.charAt(i);
+                if (d === '\\') {
+                    var e = c.charAt(i + 1);
+                    if (e >= '0' && e <= '7') {
+                        var oct = '';
+                        var k = i + 1;
+                        while (k < n && oct.length < 3 && c.charAt(k) >= '0' && c.charAt(k) <= '7') {
+                            oct += c.charAt(k);
+                            k++;
+                        }
+                        buf += String.fromCharCode(parseInt(oct, 8));
+                        i = k;
+                        continue;
+                    }
+                    if (e === 'n') { buf += '\n'; }
+                    else if (e === 'r') { buf += '\n'; }
+                    else if (e === 't') { buf += ' '; }
+                    else if (e === 'b' || e === 'f') { buf += ' '; }
+                    else if (e === '\n' || e === '\r') { /* line continuation */ }
+                    else { buf += e; }
+                    i += 2;
+                    continue;
+                }
+                if (d === '(') { depth++; buf += d; i++; continue; }
+                if (d === ')') { depth--; if (depth > 0) { buf += d; } i++; continue; }
+                buf += d;
+                i++;
+            }
+            out.push(buf);
+            continue;
+        }
+        if (ch === '<' && c.charAt(i + 1) !== '<') {
+            var endHex = c.indexOf('>', i);
+            if (endHex < 0) { break; }
+            var hex = c.substring(i + 1, endHex).replace(/[^0-9A-Fa-f]/g, '');
+            var hbuf = '';
+            for (var j = 0; j + 1 < hex.length; j += 2) {
+                hbuf += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
+            }
+            out.push(hbuf);
+            i = endHex + 1;
+            continue;
+        }
+        if (ch === 'T') {
+            var nx = c.charAt(i + 1);
+            if (nx === 'd' || nx === 'D' || nx === '*') {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+        }
+        if (ch === 'E' && c.charAt(i + 1) === 'T') {
+            out.push('\n');
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return out.join('');
+}
+
+function dc_normalise(t) {
+    return String(t)
+        .replace(/\u0000/g, '')
+        .replace(/[\r\f\u000b]/g, '\n')
+        .replace(/[ \t\u00a0]+/g, ' ')
+        .replace(/ *\n+ */g, '\n')
+        .replace(/^\n+|\n+$/g, '');
+}
+
+/* Extract all text-layer text from a PDF held as a byte array. */
+function dc_extractText(bytes) {
+    var s = dc_bytesToLatin1(bytes);
+    var chunks = [];
+    var idx = 0;
+    var guard = 0;
+    while (guard++ < 20000) {
+        var st = s.indexOf('stream', idx);
+        if (st < 0) { break; }
+        if (s.substring(st - 3, st) === 'end') {
+            idx = st + 6;
+            continue;
+        }
+        var dictStart = s.lastIndexOf('<<', st);
+        var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+        var dataStart = st + 6;
+        if (s.charAt(dataStart) === '\r') { dataStart++; }
+        if (s.charAt(dataStart) === '\n') { dataStart++; }
+        var dataEnd = s.indexOf('endstream', dataStart);
+        if (dataEnd < 0) { break; }
+        idx = dataEnd + 9;
+
+        if (dict.indexOf('/Image') >= 0 || dict.indexOf('/DCTDecode') >= 0 ||
+            dict.indexOf('/JPXDecode') >= 0 || dict.indexOf('/CCITTFaxDecode') >= 0 ||
+            dict.indexOf('/JBIG2Decode') >= 0) {
+            continue;
+        }
+
+        if (dict.indexOf('/FlateDecode') < 0) {
+            var plain = s.substring(dataStart, dataEnd);
+            if (plain.indexOf('Tj') >= 0 || plain.indexOf('TJ') >= 0) {
+                chunks.push(dc_contentText(plain));
+            }
+            continue;
+        }
+
+        try {
+            var raw = dc_inflate(bytes, dataStart, dataEnd);
+            var rs = dc_bytesToLatin1(raw);
+            if (rs.indexOf('Tj') >= 0 || rs.indexOf('TJ') >= 0) {
+                chunks.push(dc_contentText(rs));
+            }
+        } catch (e) {
+            /* encrypted, damaged, or an unsupported filter chain: skip */
+        }
+    }
+    return dc_normalise(chunks.join('\n'));
+}
+
+/* Whitespace-free lowercase form, for keyword matching on PDFs that split glyphs. */
+function dc_compact(t) {
+    return String(t).toLowerCase().replace(/\s+/g, '');
+}
+
+/* Parse "1,234.56" / "1.234,56" / "(120.00)" / "-45" into a number, or null. */
+function dc_parseAmount(raw) {
+    var s = String(raw).replace(/[^0-9.,()\-]/g, '');
+    if (!s) { return null; }
+    var neg = (s.indexOf('(') >= 0 && s.indexOf(')') >= 0) || s.indexOf('-') === 0;
+    s = s.replace(/[()\-]/g, '');
+    if (!s) { return null; }
+    var lastDot = s.lastIndexOf('.');
+    var lastCom = s.lastIndexOf(',');
+    var dec = lastDot > lastCom ? lastDot : lastCom;
+    var intPart;
+    var fracPart = '';
+    var tail = s.length - dec - 1;
+    if (dec >= 0 && tail > 0 && tail <= 2) {
+        intPart = s.substring(0, dec).replace(/[.,]/g, '');
+        fracPart = s.substring(dec + 1);
+    } else {
+        intPart = s.replace(/[.,]/g, '');
+    }
+    if (!/^[0-9]*$/.test(intPart) || !/^[0-9]*$/.test(fracPart)) { return null; }
+    if (intPart === '' && fracPart === '') { return null; }
+    var v = parseFloat((intPart === '' ? '0' : intPart) + '.' + (fracPart === '' ? '0' : fracPart));
+    if (isNaN(v)) { return null; }
+    return neg ? -v : v;
+}
+
+/* Resolve text from either a caller-supplied override or the PDF bytes. */
+function dc_resolveText(base64Content, textOverride) {
+    if (textOverride !== null && textOverride !== undefined && String(textOverride).length > 0) {
+        return dc_normalise(String(textOverride));
+    }
+    return dc_extractText(dc_b64ToBytes(base64Content));
+}
+
+/* Exposed so OIC can extract once and pass the text into the later checks. */
+function dc_extractPdfText(base64Content) {
+    var res = { text: '', textLength: 0, hasTextLayer: false, error: '' };
+    try {
+        res.text = dc_extractText(dc_b64ToBytes(base64Content));
+        res.textLength = res.text.length;
+        res.hasTextLayer = res.textLength > 20;
+    } catch (e) {
+        res.error = String(e && e.message ? e.message : e);
+    }
+    return res;
+}
+
+/**
+ * VALIDATION 4 - Document classification (invoice family or not).
+ *
+ * OIC call signature:
+ *   classifyDocument(base64Content, textOverride, invoiceFamilyStr)
+ *
+ * invoiceFamilyStr - optional comma-separated list of document types that should
+ *                    proceed into the extraction pipeline.
+ *                    Default: "INVOICE,CREDIT_NOTE".
+ *                    Set to "INVOICE" alone if credit notes must be excluded, or
+ *                    "INVOICE,CREDIT_NOTE,PROFORMA" to include pro formas.
+ *
+ * Possible documentType values:
+ *   INVOICE, CREDIT_NOTE, PROFORMA, STATEMENT, PURCHASE_ORDER, DELIVERY_NOTE,
+ *   REMITTANCE_ADVICE, QUOTATION, REMINDER, UNKNOWN
+ *
+ * Exclude from the APEX processing queue when passed === false and
+ * status === "NOT_INVOICE".
+ *
+ * status === "UNCLASSIFIED" means there was no text to classify on (scanned PDF).
+ * That returns passed = true on purpose so the document still reaches Document
+ * Understanding, which can classify it properly from the image.
+ */
+
+var DC_SIGNALS = [
+    { type: 'CREDIT_NOTE', term: 'creditnote', weight: 6 },
+    { type: 'CREDIT_NOTE', term: 'creditmemo', weight: 6 },
+    { type: 'CREDIT_NOTE', term: 'creditnoteno', weight: 3 },
+
+    { type: 'INVOICE', term: 'taxinvoice', weight: 5 },
+    { type: 'INVOICE', term: 'vatinvoice', weight: 5 },
+    { type: 'INVOICE', term: 'invoiceno', weight: 4 },
+    { type: 'INVOICE', term: 'invoicenumber', weight: 4 },
+    { type: 'INVOICE', term: 'invoicedate', weight: 4 },
+    { type: 'INVOICE', term: 'invoice', weight: 3 },
+    { type: 'INVOICE', term: 'amountdue', weight: 2 },
+    { type: 'INVOICE', term: 'billto', weight: 2 },
+    { type: 'INVOICE', term: 'remitto', weight: 2 },
+    { type: 'INVOICE', term: 'subtotal', weight: 2 },
+    { type: 'INVOICE', term: 'paymentterms', weight: 2 },
+    { type: 'INVOICE', term: 'vatregistration', weight: 2 },
+    { type: 'INVOICE', term: 'vatreg', weight: 1 },
+    { type: 'INVOICE', term: 'duedate', weight: 1 },
+
+    { type: 'PROFORMA', term: 'proforma', weight: 6 },
+    { type: 'PROFORMA', term: 'proformainvoice', weight: 3 },
+
+    { type: 'STATEMENT', term: 'statementofaccount', weight: 7 },
+    { type: 'STATEMENT', term: 'accountstatement', weight: 6 },
+    { type: 'STATEMENT', term: 'statementdate', weight: 4 },
+    { type: 'STATEMENT', term: 'openingbalance', weight: 3 },
+    { type: 'STATEMENT', term: 'broughtforward', weight: 3 },
+    { type: 'STATEMENT', term: 'agedanalysis', weight: 3 },
+    { type: 'STATEMENT', term: 'currentbalance', weight: 2 },
+
+    { type: 'PURCHASE_ORDER', term: 'purchaseorderno', weight: 4 },
+    { type: 'PURCHASE_ORDER', term: 'purchaseorder', weight: 3 },
+    { type: 'PURCHASE_ORDER', term: 'orderconfirmation', weight: 4 },
+    { type: 'PURCHASE_ORDER', term: 'deliverto', weight: 2 },
+
+    { type: 'DELIVERY_NOTE', term: 'deliverynote', weight: 7 },
+    { type: 'DELIVERY_NOTE', term: 'despatchnote', weight: 7 },
+    { type: 'DELIVERY_NOTE', term: 'dispatchnote', weight: 7 },
+    { type: 'DELIVERY_NOTE', term: 'packingslip', weight: 7 },
+    { type: 'DELIVERY_NOTE', term: 'packinglist', weight: 6 },
+    { type: 'DELIVERY_NOTE', term: 'goodsreceivednote', weight: 6 },
+
+    { type: 'REMITTANCE_ADVICE', term: 'remittanceadvice', weight: 7 },
+    { type: 'REMITTANCE_ADVICE', term: 'paymentadvice', weight: 5 },
+
+    { type: 'QUOTATION', term: 'quotation', weight: 6 },
+    { type: 'QUOTATION', term: 'quotationno', weight: 3 },
+    { type: 'QUOTATION', term: 'estimateno', weight: 4 },
+
+    { type: 'REMINDER', term: 'overduereminder', weight: 6 },
+    { type: 'REMINDER', term: 'paymentreminder', weight: 6 },
+    { type: 'REMINDER', term: 'finaldemand', weight: 6 },
+    { type: 'REMINDER', term: 'dunning', weight: 5 }
+];
+
+/* "purchase order" appears on most invoices as a reference field, so it only
+   counts towards PURCHASE_ORDER when there is no invoice evidence at all. */
+var DC_AMBIGUOUS = { 'purchaseorderno': 1, 'purchaseorder': 1, 'deliverto': 1 };
+
+function dc_score(compact) {
+    var scores = {};
+    var matched = [];
+    var i;
+    for (i = 0; i < DC_SIGNALS.length; i++) {
+        var sig = DC_SIGNALS[i];
+        if (compact.indexOf(sig.term) >= 0) {
+            if (!scores[sig.type]) { scores[sig.type] = 0; }
+            scores[sig.type] += sig.weight;
+            matched.push(sig.type + ':' + sig.term);
+        }
+    }
+    return { scores: scores, matched: matched };
+}
+
+function classifyDocument(base64Content, textOverride, invoiceFamilyStr) {
+    var res = {
+        validation: 'DOCUMENT_CLASSIFICATION',
+        passed: false,
+        passedFlag: 'N',
+        status: 'ERROR',
+        reason: '',
+        documentType: 'UNKNOWN',
+        confidence: 'NONE',
+        invoiceScore: 0,
+        competingType: '',
+        competingScore: 0,
+        matchedTerms: '',
+        hasTextLayer: false,
+        error: ''
+    };
+
+    try {
+        var family = 'INVOICE,CREDIT_NOTE';
+        if (invoiceFamilyStr !== null && invoiceFamilyStr !== undefined &&
+            String(invoiceFamilyStr).length > 0) {
+            family = String(invoiceFamilyStr).toUpperCase();
+        }
+        var familyList = family.replace(/\s+/g, '').split(',');
+
+        var text = dc_resolveText(base64Content, textOverride);
+        res.hasTextLayer = text.length > 20;
+
+        if (!res.hasTextLayer) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'UNCLASSIFIED';
+            res.reason = 'No text layer found (scanned or image-only PDF) - cannot ' +
+                'classify here. Sending to Document Understanding to classify.';
+            return res;
+        }
+
+        var compact = dc_compact(text);
+        var scored = dc_score(compact);
+        var scores = scored.scores;
+        res.matchedTerms = scored.matched.join(', ');
+
+        var invoiceScore = (scores.INVOICE || 0);
+        var creditScore = (scores.CREDIT_NOTE || 0);
+        res.invoiceScore = invoiceScore + creditScore;
+
+        /* Discount the ambiguous PO terms when invoice evidence is present. */
+        if (invoiceScore >= 4 && scores.PURCHASE_ORDER) {
+            var discount = 0;
+            for (var k in DC_AMBIGUOUS) {
+                if (DC_AMBIGUOUS.hasOwnProperty(k) && compact.indexOf(k) >= 0) {
+                    for (var j = 0; j < DC_SIGNALS.length; j++) {
+                        if (DC_SIGNALS[j].term === k) { discount += DC_SIGNALS[j].weight; }
+                    }
+                }
+            }
+            scores.PURCHASE_ORDER = scores.PURCHASE_ORDER - discount;
+            if (scores.PURCHASE_ORDER < 0) { scores.PURCHASE_ORDER = 0; }
+        }
+
+        /* Highest non-invoice-family score. */
+        var bestType = '';
+        var bestScore = 0;
+        for (var t in scores) {
+            if (!scores.hasOwnProperty(t)) { continue; }
+            if (t === 'INVOICE' || t === 'CREDIT_NOTE') { continue; }
+            if (scores[t] > bestScore) { bestScore = scores[t]; bestType = t; }
+        }
+        res.competingType = bestType;
+        res.competingScore = bestScore;
+
+        if (res.invoiceScore >= 4 && res.invoiceScore >= bestScore) {
+            res.documentType = creditScore >= 6 ? 'CREDIT_NOTE' : 'INVOICE';
+        } else if (bestScore >= 4) {
+            res.documentType = bestType;
+        } else if (res.invoiceScore >= 3) {
+            res.documentType = 'INVOICE';
+        } else {
+            res.documentType = 'UNKNOWN';
+        }
+
+        var top = res.documentType === 'INVOICE' || res.documentType === 'CREDIT_NOTE'
+            ? res.invoiceScore : bestScore;
+        res.confidence = top >= 8 ? 'HIGH' : (top >= 4 ? 'MEDIUM' : 'LOW');
+
+        var inFamily = false;
+        for (var f = 0; f < familyList.length; f++) {
+            if (familyList[f] === res.documentType) { inFamily = true; }
+        }
+
+        if (res.documentType === 'UNKNOWN') {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'UNCLASSIFIED';
+            res.reason = 'Text layer present but no document type scored high enough. ' +
+                'Sending to Document Understanding to classify.';
+            return res;
+        }
+
+        if (!inFamily) {
+            res.status = 'NOT_INVOICE';
+            res.reason = 'Classified as ' + res.documentType + ' (score ' + top +
+                ', confidence ' + res.confidence + ') - not in the invoice family (' +
+                family + ').';
+            return res;
+        }
+
+        res.passed = true;
+        res.passedFlag = 'Y';
+        res.status = 'PASSED';
+        res.reason = 'Classified as ' + res.documentType + ' (score ' + top +
+            ', confidence ' + res.confidence + ').';
+        return res;
+    } catch (e) {
+        res.status = 'ERROR';
+        res.error = String(e && e.message ? e.message : e);
+        res.reason = 'Document classification failed: ' + res.error;
+        return res;
+    }
+}
+
+</script>
+<script>
+/* validatePharmacyInvoice.js */
+/*
+ * Oracle Integration Cloud - AP invoice pre-processing.
+ * Deployable JavaScript library: validatePharmacyInvoice.js
+ *
+ * Generated from oic-preprocessing/src by build.js - edit the sources, not this file.
+ * Pure ECMAScript 5. No JAR, no require(), no browser or Node APIs.
+ */
+
+/* ---------- core A: base64 + byte helpers (no dependencies) ---------- */
+
+function ph_b64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var lookup = {};
+    var i;
+    for (i = 0; i < chars.length; i++) {
+        lookup[chars.charAt(i)] = i;
+    }
+    var clean = String(b64 === null || b64 === undefined ? '' : b64).replace(/[^A-Za-z0-9+\/]/g, '');
+    var len = clean.length;
+    var bytes = [];
+    var buf = 0;
+    var bits = 0;
+    for (i = 0; i < len; i++) {
+        buf = (buf << 6) | lookup[clean.charAt(i)];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buf >> bits) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+function ph_bytesToLatin1(bytes) {
+    var parts = [];
+    var chunk = [];
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+        chunk.push(String.fromCharCode(bytes[i] & 0xFF));
+        if (chunk.length === 8192) {
+            parts.push(chunk.join(''));
+            chunk = [];
+        }
+    }
+    parts.push(chunk.join(''));
+    return parts.join('');
+}
+
+function ph_isPdf(bytes) {
+    var head = ph_bytesToLatin1(bytes.slice(0, 1024));
+    return head.indexOf('%PDF-') >= 0;
+}
+
+/* ---------- core B: DEFLATE + PDF text extraction (pure JS) ---------- */
+
+var ph_LENS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+    59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+var ph_LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
+    4, 5, 5, 5, 5, 0];
+var ph_DISTS = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+var ph_DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+var ph_CLCIDX = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+function ph_buildHuff(lengths, n) {
+    var counts = [];
+    var offs = [];
+    var symbols = [];
+    var i;
+    for (i = 0; i < 16; i++) {
+        counts[i] = 0;
+        offs[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        counts[lengths[i]]++;
+    }
+    counts[0] = 0;
+    offs[1] = 0;
+    for (i = 1; i < 15; i++) {
+        offs[i + 1] = offs[i] + counts[i];
+    }
+    for (i = 0; i < n; i++) {
+        if (lengths[i]) {
+            symbols[offs[lengths[i]]++] = i;
+        }
+    }
+    return { counts: counts, symbols: symbols };
+}
+
+/* Raw DEFLATE / zlib inflate over bytes[start .. end). Returns array of bytes. */
+function ph_inflate(bytes, start, end) {
+    var pos = start;
+    var bitbuf = 0;
+    var bitcnt = 0;
+    var out = [];
+
+    if (end - start > 2) {
+        var cmf = bytes[start];
+        var flg = bytes[start + 1];
+        if ((cmf & 0x0F) === 8 && (((cmf << 8) + flg) % 31) === 0) {
+            pos = start + 2;
+        }
+    }
+
+    function bits(n) {
+        var v;
+        while (bitcnt < n) {
+            if (pos >= end) {
+                throw new Error('unexpected end of deflate stream');
+            }
+            bitbuf |= bytes[pos++] << bitcnt;
+            bitcnt += 8;
+        }
+        v = bitbuf & ((1 << n) - 1);
+        bitbuf >>>= n;
+        bitcnt -= n;
+        return v;
+    }
+
+    function decode(h) {
+        var code = 0;
+        var first = 0;
+        var index = 0;
+        var len;
+        var count;
+        for (len = 1; len <= 15; len++) {
+            code |= bits(1);
+            count = h.counts[len];
+            if (code - first < count) {
+                return h.symbols[index + (code - first)];
+            }
+            index += count;
+            first += count;
+            first <<= 1;
+            code <<= 1;
+        }
+        throw new Error('invalid huffman code');
+    }
+
+    function codes(lc, dc) {
+        var sym;
+        var len;
+        var dist;
+        var from;
+        var i;
+        for (;;) {
+            sym = decode(lc);
+            if (sym < 256) {
+                out.push(sym);
+            } else if (sym === 256) {
+                return;
+            } else {
+                sym -= 257;
+                if (sym >= 29) {
+                    throw new Error('invalid length code');
+                }
+                len = ph_LENS[sym] + bits(ph_LEXT[sym]);
+                sym = decode(dc);
+                if (sym >= 30) {
+                    throw new Error('invalid distance code');
+                }
+                dist = ph_DISTS[sym] + bits(ph_DEXT[sym]);
+                from = out.length - dist;
+                if (from < 0) {
+                    throw new Error('distance before start');
+                }
+                for (i = 0; i < len; i++) {
+                    out.push(out[from + i]);
+                }
+            }
+        }
+    }
+
+    var fixedL = null;
+    var fixedD = null;
+    function buildFixed() {
+        var lengths = [];
+        var i;
+        for (i = 0; i < 144; i++) { lengths[i] = 8; }
+        for (i = 144; i < 256; i++) { lengths[i] = 9; }
+        for (i = 256; i < 280; i++) { lengths[i] = 7; }
+        for (i = 280; i < 288; i++) { lengths[i] = 8; }
+        fixedL = ph_buildHuff(lengths, 288);
+        var dl = [];
+        for (i = 0; i < 30; i++) { dl[i] = 5; }
+        fixedD = ph_buildHuff(dl, 30);
+    }
+
+    var last;
+    var type;
+    do {
+        last = bits(1);
+        type = bits(2);
+        if (type === 0) {
+            bitbuf = 0;
+            bitcnt = 0;
+            if (pos + 4 > end) {
+                throw new Error('unexpected end of stored block');
+            }
+            var slen = bytes[pos] | (bytes[pos + 1] << 8);
+            pos += 4;
+            if (pos + slen > end) {
+                throw new Error('stored block overruns stream');
+            }
+            for (var si = 0; si < slen; si++) {
+                out.push(bytes[pos++]);
+            }
+        } else if (type === 1) {
+            if (fixedL === null) {
+                buildFixed();
+            }
+            codes(fixedL, fixedD);
+        } else if (type === 2) {
+            var nlen = bits(5) + 257;
+            var ndist = bits(5) + 1;
+            var ncode = bits(4) + 4;
+            var lengths = [];
+            var i;
+            for (i = 0; i < 320; i++) {
+                lengths[i] = 0;
+            }
+            for (i = 0; i < ncode; i++) {
+                lengths[ph_CLCIDX[i]] = bits(3);
+            }
+            var lencode = ph_buildHuff(lengths, 19);
+            i = 0;
+            while (i < nlen + ndist) {
+                var sym = decode(lencode);
+                var val;
+                var rep;
+                if (sym < 16) {
+                    lengths[i++] = sym;
+                } else {
+                    if (sym === 16) {
+                        if (i === 0) {
+                            throw new Error('no previous length to repeat');
+                        }
+                        val = lengths[i - 1];
+                        rep = 3 + bits(2);
+                    } else if (sym === 17) {
+                        val = 0;
+                        rep = 3 + bits(3);
+                    } else {
+                        val = 0;
+                        rep = 11 + bits(7);
+                    }
+                    while (rep--) {
+                        lengths[i++] = val;
+                    }
+                }
+            }
+            var litLens = lengths.slice(0, nlen);
+            var distLens = lengths.slice(nlen, nlen + ndist);
+            codes(ph_buildHuff(litLens, nlen), ph_buildHuff(distLens, ndist));
+        } else {
+            throw new Error('invalid block type');
+        }
+    } while (!last);
+
+    return out;
+}
+
+/* Turn one decoded content stream into plain text. */
+function ph_contentText(c) {
+    var out = [];
+    var i = 0;
+    var n = c.length;
+    var ch;
+    while (i < n) {
+        ch = c.charAt(i);
+        if (ch === '(') {
+            var depth = 1;
+            var buf = '';
+            i++;
+            while (i < n && depth > 0) {
+                var d = c.charAt(i);
+                if (d === '\\') {
+                    var e = c.charAt(i + 1);
+                    if (e >= '0' && e <= '7') {
+                        var oct = '';
+                        var k = i + 1;
+                        while (k < n && oct.length < 3 && c.charAt(k) >= '0' && c.charAt(k) <= '7') {
+                            oct += c.charAt(k);
+                            k++;
+                        }
+                        buf += String.fromCharCode(parseInt(oct, 8));
+                        i = k;
+                        continue;
+                    }
+                    if (e === 'n') { buf += '\n'; }
+                    else if (e === 'r') { buf += '\n'; }
+                    else if (e === 't') { buf += ' '; }
+                    else if (e === 'b' || e === 'f') { buf += ' '; }
+                    else if (e === '\n' || e === '\r') { /* line continuation */ }
+                    else { buf += e; }
+                    i += 2;
+                    continue;
+                }
+                if (d === '(') { depth++; buf += d; i++; continue; }
+                if (d === ')') { depth--; if (depth > 0) { buf += d; } i++; continue; }
+                buf += d;
+                i++;
+            }
+            out.push(buf);
+            continue;
+        }
+        if (ch === '<' && c.charAt(i + 1) !== '<') {
+            var endHex = c.indexOf('>', i);
+            if (endHex < 0) { break; }
+            var hex = c.substring(i + 1, endHex).replace(/[^0-9A-Fa-f]/g, '');
+            var hbuf = '';
+            for (var j = 0; j + 1 < hex.length; j += 2) {
+                hbuf += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
+            }
+            out.push(hbuf);
+            i = endHex + 1;
+            continue;
+        }
+        if (ch === 'T') {
+            var nx = c.charAt(i + 1);
+            if (nx === 'd' || nx === 'D' || nx === '*') {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+        }
+        if (ch === 'E' && c.charAt(i + 1) === 'T') {
+            out.push('\n');
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return out.join('');
+}
+
+function ph_normalise(t) {
+    return String(t)
+        .replace(/\u0000/g, '')
+        .replace(/[\r\f\u000b]/g, '\n')
+        .replace(/[ \t\u00a0]+/g, ' ')
+        .replace(/ *\n+ */g, '\n')
+        .replace(/^\n+|\n+$/g, '');
+}
+
+/* Extract all text-layer text from a PDF held as a byte array. */
+function ph_extractText(bytes) {
+    var s = ph_bytesToLatin1(bytes);
+    var chunks = [];
+    var idx = 0;
+    var guard = 0;
+    while (guard++ < 20000) {
+        var st = s.indexOf('stream', idx);
+        if (st < 0) { break; }
+        if (s.substring(st - 3, st) === 'end') {
+            idx = st + 6;
+            continue;
+        }
+        var dictStart = s.lastIndexOf('<<', st);
+        var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+        var dataStart = st + 6;
+        if (s.charAt(dataStart) === '\r') { dataStart++; }
+        if (s.charAt(dataStart) === '\n') { dataStart++; }
+        var dataEnd = s.indexOf('endstream', dataStart);
+        if (dataEnd < 0) { break; }
+        idx = dataEnd + 9;
+
+        if (dict.indexOf('/Image') >= 0 || dict.indexOf('/DCTDecode') >= 0 ||
+            dict.indexOf('/JPXDecode') >= 0 || dict.indexOf('/CCITTFaxDecode') >= 0 ||
+            dict.indexOf('/JBIG2Decode') >= 0) {
+            continue;
+        }
+
+        if (dict.indexOf('/FlateDecode') < 0) {
+            var plain = s.substring(dataStart, dataEnd);
+            if (plain.indexOf('Tj') >= 0 || plain.indexOf('TJ') >= 0) {
+                chunks.push(ph_contentText(plain));
+            }
+            continue;
+        }
+
+        try {
+            var raw = ph_inflate(bytes, dataStart, dataEnd);
+            var rs = ph_bytesToLatin1(raw);
+            if (rs.indexOf('Tj') >= 0 || rs.indexOf('TJ') >= 0) {
+                chunks.push(ph_contentText(rs));
+            }
+        } catch (e) {
+            /* encrypted, damaged, or an unsupported filter chain: skip */
+        }
+    }
+    return ph_normalise(chunks.join('\n'));
+}
+
+/* Whitespace-free lowercase form, for keyword matching on PDFs that split glyphs. */
+function ph_compact(t) {
+    return String(t).toLowerCase().replace(/\s+/g, '');
+}
+
+/* Parse "1,234.56" / "1.234,56" / "(120.00)" / "-45" into a number, or null. */
+function ph_parseAmount(raw) {
+    var s = String(raw).replace(/[^0-9.,()\-]/g, '');
+    if (!s) { return null; }
+    var neg = (s.indexOf('(') >= 0 && s.indexOf(')') >= 0) || s.indexOf('-') === 0;
+    s = s.replace(/[()\-]/g, '');
+    if (!s) { return null; }
+    var lastDot = s.lastIndexOf('.');
+    var lastCom = s.lastIndexOf(',');
+    var dec = lastDot > lastCom ? lastDot : lastCom;
+    var intPart;
+    var fracPart = '';
+    var tail = s.length - dec - 1;
+    if (dec >= 0 && tail > 0 && tail <= 2) {
+        intPart = s.substring(0, dec).replace(/[.,]/g, '');
+        fracPart = s.substring(dec + 1);
+    } else {
+        intPart = s.replace(/[.,]/g, '');
+    }
+    if (!/^[0-9]*$/.test(intPart) || !/^[0-9]*$/.test(fracPart)) { return null; }
+    if (intPart === '' && fracPart === '') { return null; }
+    var v = parseFloat((intPart === '' ? '0' : intPart) + '.' + (fracPart === '' ? '0' : fracPart));
+    if (isNaN(v)) { return null; }
+    return neg ? -v : v;
+}
+
+/* Resolve text from either a caller-supplied override or the PDF bytes. */
+function ph_resolveText(base64Content, textOverride) {
+    if (textOverride !== null && textOverride !== undefined && String(textOverride).length > 0) {
+        return ph_normalise(String(textOverride));
+    }
+    return ph_extractText(ph_b64ToBytes(base64Content));
+}
+
+/* Exposed so OIC can extract once and pass the text into the later checks. */
+function ph_extractPdfText(base64Content) {
+    var res = { text: '', textLength: 0, hasTextLayer: false, error: '' };
+    try {
+        res.text = ph_extractText(ph_b64ToBytes(base64Content));
+        res.textLength = res.text.length;
+        res.hasTextLayer = res.textLength > 20;
+    } catch (e) {
+        res.error = String(e && e.message ? e.message : e);
+    }
+    return res;
+}
+
+/**
+ * VALIDATION 5 - Pharmacy invoice detection by PO number prefix.
+ *
+ * OIC call signature:
+ *   validatePharmacyInvoice(base64Content, textOverride, pharmacyPrefixes)
+ *
+ * pharmacyPrefixes - REQUIRED. Comma-separated list of PO number prefixes that
+ *                    route to pharmacy, e.g. "PH,PHM,RX".
+ *                    [EVIDENCE NEEDED: the real prefix list for your AP setup.
+ *                    There is no default because guessing it would either reject
+ *                    good invoices or let pharmacy invoices through silently.]
+ *
+ * Reject to the APEX rejected queue when status === "PHARMACY_INVOICE".
+ *
+ * status === "CONFIG_MISSING" means no prefixes were supplied. It returns
+ * passed = true so nothing is wrongly rejected, but route that status to an
+ * error/alert path in OIC - the check is not actually running.
+ */
+
+var PH_PO_PATTERNS = [
+    /(?:purchase\s*order|p\s*\.?\s*o\s*\.?)\s*(?:number|no\.?|num|nbr|ref(?:erence)?|#)?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,29})/gi,
+    /(?:customer\s*(?:po|order)|your\s*(?:po|order)|order)\s*(?:number|no\.?|ref(?:erence)?|#)\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,29})/gi
+];
+
+/* Reject obvious non-PO captures: dates, plain money, single words. */
+var PH_REJECT = [
+    /^\d{1,2}[\-\/]\d{1,2}[\-\/]\d{2,4}$/,
+    /^\d{1,2}[\-\/][A-Za-z]{3}[\-\/]?\d{0,4}$/,
+    /^(number|no|date|ref|reference|not|none|n\/a|na|tbc|tba)$/i
+];
+
+function ph_looksLikePo(value) {
+    if (!value || value.length < 3) { return false; }
+    for (var i = 0; i < PH_REJECT.length; i++) {
+        if (PH_REJECT[i].test(value)) { return false; }
+    }
+    /* a PO reference must contain at least one digit */
+    return /\d/.test(value);
+}
+
+function ph_extractPoNumbers(text) {
+    var seen = {};
+    var list = [];
+    for (var p = 0; p < PH_PO_PATTERNS.length; p++) {
+        var re = PH_PO_PATTERNS[p];
+        re.lastIndex = 0;
+        var m;
+        var guard = 0;
+        while ((m = re.exec(text)) !== null && guard++ < 500) {
+            var raw = String(m[1]).replace(/[^A-Za-z0-9\-\/]/g, '').toUpperCase();
+            if (!ph_looksLikePo(raw)) { continue; }
+            if (seen[raw]) { continue; }
+            seen[raw] = true;
+            list.push(raw);
+        }
+    }
+    return list;
+}
+
+function validatePharmacyInvoice(base64Content, textOverride, pharmacyPrefixes) {
+    var res = {
+        validation: 'PHARMACY_INVOICE',
+        passed: false,
+        passedFlag: 'N',
+        status: 'ERROR',
+        reason: '',
+        poNumber: '',
+        poNumbers: '',
+        poCount: 0,
+        matchedPrefix: '',
+        prefixesUsed: '',
+        hasTextLayer: false,
+        error: ''
+    };
+
+    try {
+        var prefixRaw = pharmacyPrefixes === null || pharmacyPrefixes === undefined
+            ? '' : String(pharmacyPrefixes);
+        var prefixes = [];
+        var parts = prefixRaw.toUpperCase().split(',');
+        for (var i = 0; i < parts.length; i++) {
+            var p = parts[i].replace(/[^A-Z0-9\-\/]/g, '');
+            if (p.length > 0) { prefixes.push(p); }
+        }
+        res.prefixesUsed = prefixes.join(',');
+
+        if (prefixes.length === 0) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'CONFIG_MISSING';
+            res.reason = 'No pharmacy PO prefixes were supplied, so the pharmacy check ' +
+                'did not run. Pass a comma-separated list such as "PH,PHM,RX".';
+            return res;
+        }
+
+        var text = ph_resolveText(base64Content, textOverride);
+        res.hasTextLayer = text.length > 20;
+
+        if (!res.hasTextLayer) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'PO_NOT_FOUND';
+            res.reason = 'No text layer found (scanned or image-only PDF) - PO number ' +
+                'cannot be read here. Re-run this check on the DU-extracted PO number.';
+            return res;
+        }
+
+        var pos = ph_extractPoNumbers(text);
+        res.poNumbers = pos.join(',');
+        res.poCount = pos.length;
+
+        if (pos.length === 0) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'PO_NOT_FOUND';
+            res.reason = 'No PO number found in the text layer.';
+            return res;
+        }
+
+        res.poNumber = pos[0];
+
+        for (var a = 0; a < pos.length; a++) {
+            for (var b = 0; b < prefixes.length; b++) {
+                if (pos[a].indexOf(prefixes[b]) === 0) {
+                    res.poNumber = pos[a];
+                    res.matchedPrefix = prefixes[b];
+                    res.status = 'PHARMACY_INVOICE';
+                    res.reason = 'PO number ' + pos[a] + ' starts with pharmacy prefix "' +
+                        prefixes[b] + '" - route to pharmacy handling.';
+                    return res;
+                }
+            }
+        }
+
+        res.passed = true;
+        res.passedFlag = 'Y';
+        res.status = 'PASSED';
+        res.reason = 'PO number(s) ' + res.poNumbers + ' do not match any pharmacy prefix (' +
+            res.prefixesUsed + ').';
+        return res;
+    } catch (e) {
+        res.status = 'ERROR';
+        res.error = String(e && e.message ? e.message : e);
+        res.reason = 'Pharmacy check failed: ' + res.error;
+        return res;
+    }
+}
+
+</script>
+<script>
+/* validateMultiInvoice.js */
+/*
+ * Oracle Integration Cloud - AP invoice pre-processing.
+ * Deployable JavaScript library: validateMultiInvoice.js
+ *
+ * Generated from oic-preprocessing/src by build.js - edit the sources, not this file.
+ * Pure ECMAScript 5. No JAR, no require(), no browser or Node APIs.
+ */
+
+/* ---------- core A: base64 + byte helpers (no dependencies) ---------- */
+
+function mi_b64ToBytes(b64) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var lookup = {};
+    var i;
+    for (i = 0; i < chars.length; i++) {
+        lookup[chars.charAt(i)] = i;
+    }
+    var clean = String(b64 === null || b64 === undefined ? '' : b64).replace(/[^A-Za-z0-9+\/]/g, '');
+    var len = clean.length;
+    var bytes = [];
+    var buf = 0;
+    var bits = 0;
+    for (i = 0; i < len; i++) {
+        buf = (buf << 6) | lookup[clean.charAt(i)];
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buf >> bits) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+function mi_bytesToLatin1(bytes) {
+    var parts = [];
+    var chunk = [];
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+        chunk.push(String.fromCharCode(bytes[i] & 0xFF));
+        if (chunk.length === 8192) {
+            parts.push(chunk.join(''));
+            chunk = [];
+        }
+    }
+    parts.push(chunk.join(''));
+    return parts.join('');
+}
+
+function mi_isPdf(bytes) {
+    var head = mi_bytesToLatin1(bytes.slice(0, 1024));
+    return head.indexOf('%PDF-') >= 0;
+}
+
+/* ---------- core B: DEFLATE + PDF text extraction (pure JS) ---------- */
+
+var mi_LENS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51,
+    59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+var mi_LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
+    4, 5, 5, 5, 5, 0];
+var mi_DISTS = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+var mi_DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+var mi_CLCIDX = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+function mi_buildHuff(lengths, n) {
+    var counts = [];
+    var offs = [];
+    var symbols = [];
+    var i;
+    for (i = 0; i < 16; i++) {
+        counts[i] = 0;
+        offs[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        counts[lengths[i]]++;
+    }
+    counts[0] = 0;
+    offs[1] = 0;
+    for (i = 1; i < 15; i++) {
+        offs[i + 1] = offs[i] + counts[i];
+    }
+    for (i = 0; i < n; i++) {
+        if (lengths[i]) {
+            symbols[offs[lengths[i]]++] = i;
+        }
+    }
+    return { counts: counts, symbols: symbols };
+}
+
+/* Raw DEFLATE / zlib inflate over bytes[start .. end). Returns array of bytes. */
+function mi_inflate(bytes, start, end) {
+    var pos = start;
+    var bitbuf = 0;
+    var bitcnt = 0;
+    var out = [];
+
+    if (end - start > 2) {
+        var cmf = bytes[start];
+        var flg = bytes[start + 1];
+        if ((cmf & 0x0F) === 8 && (((cmf << 8) + flg) % 31) === 0) {
+            pos = start + 2;
+        }
+    }
+
+    function bits(n) {
+        var v;
+        while (bitcnt < n) {
+            if (pos >= end) {
+                throw new Error('unexpected end of deflate stream');
+            }
+            bitbuf |= bytes[pos++] << bitcnt;
+            bitcnt += 8;
+        }
+        v = bitbuf & ((1 << n) - 1);
+        bitbuf >>>= n;
+        bitcnt -= n;
+        return v;
+    }
+
+    function decode(h) {
+        var code = 0;
+        var first = 0;
+        var index = 0;
+        var len;
+        var count;
+        for (len = 1; len <= 15; len++) {
+            code |= bits(1);
+            count = h.counts[len];
+            if (code - first < count) {
+                return h.symbols[index + (code - first)];
+            }
+            index += count;
+            first += count;
+            first <<= 1;
+            code <<= 1;
+        }
+        throw new Error('invalid huffman code');
+    }
+
+    function codes(lc, dc) {
+        var sym;
+        var len;
+        var dist;
+        var from;
+        var i;
+        for (;;) {
+            sym = decode(lc);
+            if (sym < 256) {
+                out.push(sym);
+            } else if (sym === 256) {
+                return;
+            } else {
+                sym -= 257;
+                if (sym >= 29) {
+                    throw new Error('invalid length code');
+                }
+                len = mi_LENS[sym] + bits(mi_LEXT[sym]);
+                sym = decode(dc);
+                if (sym >= 30) {
+                    throw new Error('invalid distance code');
+                }
+                dist = mi_DISTS[sym] + bits(mi_DEXT[sym]);
+                from = out.length - dist;
+                if (from < 0) {
+                    throw new Error('distance before start');
+                }
+                for (i = 0; i < len; i++) {
+                    out.push(out[from + i]);
+                }
+            }
+        }
+    }
+
+    var fixedL = null;
+    var fixedD = null;
+    function buildFixed() {
+        var lengths = [];
+        var i;
+        for (i = 0; i < 144; i++) { lengths[i] = 8; }
+        for (i = 144; i < 256; i++) { lengths[i] = 9; }
+        for (i = 256; i < 280; i++) { lengths[i] = 7; }
+        for (i = 280; i < 288; i++) { lengths[i] = 8; }
+        fixedL = mi_buildHuff(lengths, 288);
+        var dl = [];
+        for (i = 0; i < 30; i++) { dl[i] = 5; }
+        fixedD = mi_buildHuff(dl, 30);
+    }
+
+    var last;
+    var type;
+    do {
+        last = bits(1);
+        type = bits(2);
+        if (type === 0) {
+            bitbuf = 0;
+            bitcnt = 0;
+            if (pos + 4 > end) {
+                throw new Error('unexpected end of stored block');
+            }
+            var slen = bytes[pos] | (bytes[pos + 1] << 8);
+            pos += 4;
+            if (pos + slen > end) {
+                throw new Error('stored block overruns stream');
+            }
+            for (var si = 0; si < slen; si++) {
+                out.push(bytes[pos++]);
+            }
+        } else if (type === 1) {
+            if (fixedL === null) {
+                buildFixed();
+            }
+            codes(fixedL, fixedD);
+        } else if (type === 2) {
+            var nlen = bits(5) + 257;
+            var ndist = bits(5) + 1;
+            var ncode = bits(4) + 4;
+            var lengths = [];
+            var i;
+            for (i = 0; i < 320; i++) {
+                lengths[i] = 0;
+            }
+            for (i = 0; i < ncode; i++) {
+                lengths[mi_CLCIDX[i]] = bits(3);
+            }
+            var lencode = mi_buildHuff(lengths, 19);
+            i = 0;
+            while (i < nlen + ndist) {
+                var sym = decode(lencode);
+                var val;
+                var rep;
+                if (sym < 16) {
+                    lengths[i++] = sym;
+                } else {
+                    if (sym === 16) {
+                        if (i === 0) {
+                            throw new Error('no previous length to repeat');
+                        }
+                        val = lengths[i - 1];
+                        rep = 3 + bits(2);
+                    } else if (sym === 17) {
+                        val = 0;
+                        rep = 3 + bits(3);
+                    } else {
+                        val = 0;
+                        rep = 11 + bits(7);
+                    }
+                    while (rep--) {
+                        lengths[i++] = val;
+                    }
+                }
+            }
+            var litLens = lengths.slice(0, nlen);
+            var distLens = lengths.slice(nlen, nlen + ndist);
+            codes(mi_buildHuff(litLens, nlen), mi_buildHuff(distLens, ndist));
+        } else {
+            throw new Error('invalid block type');
+        }
+    } while (!last);
+
+    return out;
+}
+
+/* Turn one decoded content stream into plain text. */
+function mi_contentText(c) {
+    var out = [];
+    var i = 0;
+    var n = c.length;
+    var ch;
+    while (i < n) {
+        ch = c.charAt(i);
+        if (ch === '(') {
+            var depth = 1;
+            var buf = '';
+            i++;
+            while (i < n && depth > 0) {
+                var d = c.charAt(i);
+                if (d === '\\') {
+                    var e = c.charAt(i + 1);
+                    if (e >= '0' && e <= '7') {
+                        var oct = '';
+                        var k = i + 1;
+                        while (k < n && oct.length < 3 && c.charAt(k) >= '0' && c.charAt(k) <= '7') {
+                            oct += c.charAt(k);
+                            k++;
+                        }
+                        buf += String.fromCharCode(parseInt(oct, 8));
+                        i = k;
+                        continue;
+                    }
+                    if (e === 'n') { buf += '\n'; }
+                    else if (e === 'r') { buf += '\n'; }
+                    else if (e === 't') { buf += ' '; }
+                    else if (e === 'b' || e === 'f') { buf += ' '; }
+                    else if (e === '\n' || e === '\r') { /* line continuation */ }
+                    else { buf += e; }
+                    i += 2;
+                    continue;
+                }
+                if (d === '(') { depth++; buf += d; i++; continue; }
+                if (d === ')') { depth--; if (depth > 0) { buf += d; } i++; continue; }
+                buf += d;
+                i++;
+            }
+            out.push(buf);
+            continue;
+        }
+        if (ch === '<' && c.charAt(i + 1) !== '<') {
+            var endHex = c.indexOf('>', i);
+            if (endHex < 0) { break; }
+            var hex = c.substring(i + 1, endHex).replace(/[^0-9A-Fa-f]/g, '');
+            var hbuf = '';
+            for (var j = 0; j + 1 < hex.length; j += 2) {
+                hbuf += String.fromCharCode(parseInt(hex.substr(j, 2), 16));
+            }
+            out.push(hbuf);
+            i = endHex + 1;
+            continue;
+        }
+        if (ch === 'T') {
+            var nx = c.charAt(i + 1);
+            if (nx === 'd' || nx === 'D' || nx === '*') {
+                out.push('\n');
+                i += 2;
+                continue;
+            }
+        }
+        if (ch === 'E' && c.charAt(i + 1) === 'T') {
+            out.push('\n');
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return out.join('');
+}
+
+function mi_normalise(t) {
+    return String(t)
+        .replace(/\u0000/g, '')
+        .replace(/[\r\f\u000b]/g, '\n')
+        .replace(/[ \t\u00a0]+/g, ' ')
+        .replace(/ *\n+ */g, '\n')
+        .replace(/^\n+|\n+$/g, '');
+}
+
+/* Extract all text-layer text from a PDF held as a byte array. */
+function mi_extractText(bytes) {
+    var s = mi_bytesToLatin1(bytes);
+    var chunks = [];
+    var idx = 0;
+    var guard = 0;
+    while (guard++ < 20000) {
+        var st = s.indexOf('stream', idx);
+        if (st < 0) { break; }
+        if (s.substring(st - 3, st) === 'end') {
+            idx = st + 6;
+            continue;
+        }
+        var dictStart = s.lastIndexOf('<<', st);
+        var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+        var dataStart = st + 6;
+        if (s.charAt(dataStart) === '\r') { dataStart++; }
+        if (s.charAt(dataStart) === '\n') { dataStart++; }
+        var dataEnd = s.indexOf('endstream', dataStart);
+        if (dataEnd < 0) { break; }
+        idx = dataEnd + 9;
+
+        if (dict.indexOf('/Image') >= 0 || dict.indexOf('/DCTDecode') >= 0 ||
+            dict.indexOf('/JPXDecode') >= 0 || dict.indexOf('/CCITTFaxDecode') >= 0 ||
+            dict.indexOf('/JBIG2Decode') >= 0) {
+            continue;
+        }
+
+        if (dict.indexOf('/FlateDecode') < 0) {
+            var plain = s.substring(dataStart, dataEnd);
+            if (plain.indexOf('Tj') >= 0 || plain.indexOf('TJ') >= 0) {
+                chunks.push(mi_contentText(plain));
+            }
+            continue;
+        }
+
+        try {
+            var raw = mi_inflate(bytes, dataStart, dataEnd);
+            var rs = mi_bytesToLatin1(raw);
+            if (rs.indexOf('Tj') >= 0 || rs.indexOf('TJ') >= 0) {
+                chunks.push(mi_contentText(rs));
+            }
+        } catch (e) {
+            /* encrypted, damaged, or an unsupported filter chain: skip */
+        }
+    }
+    return mi_normalise(chunks.join('\n'));
+}
+
+/* Whitespace-free lowercase form, for keyword matching on PDFs that split glyphs. */
+function mi_compact(t) {
+    return String(t).toLowerCase().replace(/\s+/g, '');
+}
+
+/* Parse "1,234.56" / "1.234,56" / "(120.00)" / "-45" into a number, or null. */
+function mi_parseAmount(raw) {
+    var s = String(raw).replace(/[^0-9.,()\-]/g, '');
+    if (!s) { return null; }
+    var neg = (s.indexOf('(') >= 0 && s.indexOf(')') >= 0) || s.indexOf('-') === 0;
+    s = s.replace(/[()\-]/g, '');
+    if (!s) { return null; }
+    var lastDot = s.lastIndexOf('.');
+    var lastCom = s.lastIndexOf(',');
+    var dec = lastDot > lastCom ? lastDot : lastCom;
+    var intPart;
+    var fracPart = '';
+    var tail = s.length - dec - 1;
+    if (dec >= 0 && tail > 0 && tail <= 2) {
+        intPart = s.substring(0, dec).replace(/[.,]/g, '');
+        fracPart = s.substring(dec + 1);
+    } else {
+        intPart = s.replace(/[.,]/g, '');
+    }
+    if (!/^[0-9]*$/.test(intPart) || !/^[0-9]*$/.test(fracPart)) { return null; }
+    if (intPart === '' && fracPart === '') { return null; }
+    var v = parseFloat((intPart === '' ? '0' : intPart) + '.' + (fracPart === '' ? '0' : fracPart));
+    if (isNaN(v)) { return null; }
+    return neg ? -v : v;
+}
+
+/* Resolve text from either a caller-supplied override or the PDF bytes. */
+function mi_resolveText(base64Content, textOverride) {
+    if (textOverride !== null && textOverride !== undefined && String(textOverride).length > 0) {
+        return mi_normalise(String(textOverride));
+    }
+    return mi_extractText(mi_b64ToBytes(base64Content));
+}
+
+/* Exposed so OIC can extract once and pass the text into the later checks. */
+function mi_extractPdfText(base64Content) {
+    var res = { text: '', textLength: 0, hasTextLayer: false, error: '' };
+    try {
+        res.text = mi_extractText(mi_b64ToBytes(base64Content));
+        res.textLength = res.text.length;
+        res.hasTextLayer = res.textLength > 20;
+    } catch (e) {
+        res.error = String(e && e.message ? e.message : e);
+    }
+    return res;
+}
+
+/**
+ * VALIDATION 6 - Multi-invoice PDF detection.
+ *
+ * OIC call signature:
+ *   validateMultiInvoice(base64Content, textOverride)
+ *
+ * base64Content - always required here: the page count is read from the PDF
+ *                 object structure, not from the text.
+ * textOverride  - optional, as in validations 3-5.
+ *
+ * Reject, log to the database and show in the APEX rejected queue when
+ * status === "MULTI_INVOICE".
+ *
+ * Two independent signals are used, and either one is enough to reject:
+ *   1. More than one distinct invoice number appears in the text.
+ *   2. More than one "Page 1 of N" marker appears - each one starts a new document.
+ *
+ * Known false positive: a covering page or an appendix that quotes a second
+ * invoice number will trip signal 1. invoiceNumbers is returned in full so the
+ * AP team can see what was matched from the APEX rejected queue.
+ */
+
+var MI_INVOICE_NO = /invoice\s*(?:no|number|nbr|num|#)\s*\.?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{2,29})/gi;
+var MI_PAGE_ONE = /page\s*1\s*(?:of|\/)\s*\d+/gi;
+var MI_PAGE_OF = /page\s*(\d+)\s*(?:of|\/)\s*(\d+)/gi;
+
+var MI_REJECT = /^(number|no|date|ref|reference|none|n\/a|na|tbc|tba|to|for)$/i;
+
+function mi_invoiceNumbers(text) {
+    var seen = {};
+    var list = [];
+    var m;
+    var guard = 0;
+    MI_INVOICE_NO.lastIndex = 0;
+    while ((m = MI_INVOICE_NO.exec(text)) !== null && guard++ < 1000) {
+        var raw = String(m[1]).replace(/[^A-Za-z0-9\-\/]/g, '').toUpperCase();
+        if (raw.length < 3) { continue; }
+        if (MI_REJECT.test(raw)) { continue; }
+        if (!/\d/.test(raw)) { continue; }
+        if (seen[raw]) { continue; }
+        seen[raw] = true;
+        list.push(raw);
+    }
+    return list;
+}
+
+function mi_countMatches(text, re) {
+    re.lastIndex = 0;
+    var n = 0;
+    var guard = 0;
+    while (re.exec(text) !== null && guard++ < 5000) { n++; }
+    return n;
+}
+
+/* Count page objects, including pages hidden inside compressed object streams. */
+function mi_pageCount(bytes) {
+    var s = mi_bytesToLatin1(bytes);
+    var re = /\/Type\s*\/Page[^s]/g;
+    var count = mi_countMatches(s, re);
+    if (count > 0) { return count; }
+
+    /* PDF 1.5+ cross-reference streams keep the page tree inside object streams. */
+    var idx = 0;
+    var guard = 0;
+    while (guard++ < 2000) {
+        var st = s.indexOf('stream', idx);
+        if (st < 0) { break; }
+        if (s.substring(st - 3, st) === 'end') { idx = st + 6; continue; }
+        var dictStart = s.lastIndexOf('<<', st);
+        var dict = dictStart >= 0 ? s.substring(dictStart, st) : '';
+        var dataStart = st + 6;
+        if (s.charAt(dataStart) === '\r') { dataStart++; }
+        if (s.charAt(dataStart) === '\n') { dataStart++; }
+        var dataEnd = s.indexOf('endstream', dataStart);
+        if (dataEnd < 0) { break; }
+        idx = dataEnd + 9;
+        if (dict.indexOf('/ObjStm') < 0) { continue; }
+        try {
+            var raw = mi_inflate(bytes, dataStart, dataEnd);
+            count += mi_countMatches(mi_bytesToLatin1(raw), /\/Type\s*\/Page[^s]/g);
+        } catch (ignored) {
+            /* skip */
+        }
+    }
+    return count;
+}
+
+function validateMultiInvoice(base64Content, textOverride) {
+    var res = {
+        validation: 'MULTI_INVOICE',
+        passed: false,
+        passedFlag: 'N',
+        status: 'ERROR',
+        reason: '',
+        invoiceCount: 0,
+        invoiceNumbers: '',
+        pageOneMarkers: 0,
+        pageCount: 0,
+        detectedBy: '',
+        hasTextLayer: false,
+        error: ''
+    };
+
+    try {
+        var bytes = mi_b64ToBytes(base64Content);
+        res.pageCount = bytes.length > 0 ? mi_pageCount(bytes) : 0;
+
+        var text = mi_resolveText(base64Content, textOverride);
+        res.hasTextLayer = text.length > 20;
+
+        if (!res.hasTextLayer) {
+            res.passed = true;
+            res.passedFlag = 'Y';
+            res.status = 'UNDETERMINED';
+            res.reason = 'No text layer found (scanned or image-only PDF) - cannot count ' +
+                'invoices here. ' + res.pageCount + ' page(s) detected. Sending to ' +
+                'Document Understanding.';
+            return res;
+        }
+
+        var numbers = mi_invoiceNumbers(text);
+        res.invoiceCount = numbers.length;
+        res.invoiceNumbers = numbers.join(',');
+        res.pageOneMarkers = mi_countMatches(text, MI_PAGE_ONE);
+
+        if (numbers.length > 1) {
+            res.detectedBy = 'DISTINCT_INVOICE_NUMBERS';
+            res.status = 'MULTI_INVOICE';
+            res.reason = numbers.length + ' distinct invoice numbers found (' +
+                res.invoiceNumbers + ') across ' + res.pageCount +
+                ' page(s) - PDF contains more than one invoice.';
+            return res;
+        }
+
+        if (res.pageOneMarkers > 1) {
+            res.detectedBy = 'REPEATED_PAGE_ONE_MARKER';
+            res.status = 'MULTI_INVOICE';
+            res.reason = res.pageOneMarkers + ' separate "Page 1 of N" markers found ' +
+                'across ' + res.pageCount + ' page(s) - PDF contains more than one document.';
+            return res;
+        }
+
+        res.passed = true;
+        res.passedFlag = 'Y';
+        res.status = 'PASSED';
+        res.reason = 'Single invoice detected (' +
+            (res.invoiceCount === 1 ? 'invoice number ' + res.invoiceNumbers
+                : 'no invoice number in text') +
+            ', ' + res.pageCount + ' page(s)).';
+        return res;
+    } catch (e) {
+        res.status = 'ERROR';
+        res.error = String(e && e.message ? e.message : e);
+        res.reason = 'Multi-invoice check failed: ' + res.error;
+        return res;
+    }
+}
+
+</script>
+
+<script>
+/* If the six libraries did not load, say so plainly instead of failing later with
+   "validateFileFormat is not defined" once a PDF has already been dropped. */
+(function () {
+  var need = [
+    ['validateFileFormat', 'validateFileFormat.js'],
+    ['validatePasswordProtection', 'validatePasswordProtection.js'],
+    ['zv_extractPdfText', 'validateZeroValue.js'],
+    ['validateZeroValue', 'validateZeroValue.js'],
+    ['classifyDocument', 'classifyDocument.js'],
+    ['validatePharmacyInvoice', 'validatePharmacyInvoice.js'],
+    ['validateMultiInvoice', 'validateMultiInvoice.js']
+  ];
+  var missing = [];
+  for (var i = 0; i < need.length; i++) {
+    if (typeof window[need[i][0]] !== 'function' && missing.indexOf(need[i][1]) < 0) {
+      missing.push(need[i][1]);
+    }
+  }
+  if (missing.length === 0) { return; }
+  document.getElementById('drop').style.display = 'none';
+  document.getElementById('out').innerHTML =
+    '<div class="panel"><div class="file" style="color:#b32222">' +
+    'The validation libraries did not load</div>' +
+    '<p>This page expects a <code>dist</code> folder beside it holding the six built ' +
+    '<code>.js</code> files. Not found: <code>' + missing.join('</code>, <code>') +
+    '</code>.</p>' +
+    '<p>Either put this file in the <code>oic-preprocessing</code> folder so that ' +
+    '<code>dist/</code> sits next to it, or use the standalone build ' +
+    '<code>dist/oic-validator-tester.html</code>, which has all six libraries ' +
+    'inlined and works from any folder on its own.</p></div>';
+})();
+</script>
+
+<script>
+var INDETERMINATE = { TOTAL_NOT_FOUND: 1, UNCLASSIFIED: 1, PO_NOT_FOUND: 1,
+                      UNDETERMINED: 1, CONFIG_MISSING: 1 };
+
+function verdictOf(status) {
+  if (status === 'PASSED') { return 'pass'; }
+  if (status === 'ERROR') { return 'err'; }
+  if (INDETERMINATE[status]) { return 'skip'; }
+  return 'rej';
+}
+
+function toBase64(arrayBuffer) {
+  var bytes = new Uint8Array(arrayBuffer);
+  var chunk = 0x8000;
+  var parts = [];
+  for (var i = 0; i < bytes.length; i += chunk) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)));
+  }
+  return btoa(parts.join(''));
+}
+
+function runPipeline(fileName, b64, opts) {
+  var steps = [];
+  var pdfText = '';
+  var stopped = false;
+
+  /* Only a rejection (or an error) stops the chain. A check that could not run on the
+     evidence available must not halt it: a scanned PDF returns TOTAL_NOT_FOUND at
+     step 3, and stopping there would skip the classification and multi-invoice
+     checks, which can still reject the document. */
+  function step(n, name, result) {
+    steps.push({ n: n, name: name, result: result });
+    var v = verdictOf(result.status);
+    if ((v === 'rej' || v === 'err') && !opts.all) { stopped = true; }
+  }
+
+  step(1, 'File format', validateFileFormat(fileName, b64));
+  if (!stopped) { step(2, 'Password protection', validatePasswordProtection(b64)); }
+  if (!stopped) {
+    pdfText = zv_extractPdfText(b64).text;
+    step(3, 'Zero value', validateZeroValue('', pdfText, opts.tolerance));
+  }
+  if (!stopped) { step(4, 'Classification', classifyDocument('', pdfText, opts.family)); }
+  if (!stopped) { step(5, 'Pharmacy', validatePharmacyInvoice('', pdfText, opts.prefixes)); }
+  if (!stopped) { step(6, 'Multi-invoice', validateMultiInvoice(b64, pdfText)); }
+
+  var clean = steps.length === 6;
+  for (var s = 0; s < steps.length; s++) {
+    if (steps[s].result.status !== 'PASSED') { clean = false; }
+  }
+  return { steps: steps, pdfText: pdfText, clean: clean };
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function render(fileName, run) {
+  var rows = run.steps.map(function (s) {
+    var v = verdictOf(s.result.status);
+    var label = v === 'pass' ? 'PASS' : (v === 'rej' ? 'REJECT'
+              : (v === 'skip' ? 'SKIPPED' : 'ERROR'));
+    return '<tr>' +
+      '<td>' + s.n + '. ' + esc(s.name) + '</td>' +
+      '<td class="tag ' + v + '">' + label + '</td>' +
+      '<td>' + esc(s.result.status) + '</td>' +
+      '<td class="reason">' + esc(s.result.reason || s.result.error) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  var stop = null;
+  for (var i = 0; i < run.steps.length; i++) {
+    var sv = verdictOf(run.steps[i].result.status);
+    if (sv === 'rej' || sv === 'err') { stop = run.steps[i]; break; }
+  }
+
+  var v;
+  if (stop) {
+    v = '<div class="verdict no">REJECTED at step ' + stop.n + ' (' + esc(stop.name) +
+        ') &mdash; ' + esc(stop.result.status) + '</div>';
+  } else if (run.clean) {
+    v = '<div class="verdict go">Proceeds to DU key-value extraction, all six checks clean</div>';
+  } else {
+    v = '<div class="verdict warn">Proceeds to DU, but some checks could not run ' +
+        '(SKIPPED rows above)</div>';
+  }
+
+  return '<div class="panel">' +
+    '<div class="file">' + esc(fileName) + '</div>' +
+    '<table><thead><tr><th>Check</th><th></th><th>Status</th><th>Reason</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' + v +
+    '<details><summary>Extracted text layer (' + run.pdfText.length + ' chars)</summary>' +
+    '<pre>' + esc(run.pdfText || '(none - scanned or image-only PDF)') + '</pre></details>' +
+    '<details><summary>Raw result objects</summary><pre>' +
+    esc(JSON.stringify(run.steps.map(function (s) { return s.result; }), null, 2)) +
+    '</pre></details></div>';
+}
+
+function handleFiles(fileList) {
+  var out = document.getElementById('out');
+  out.innerHTML = '';
+  var opts = {
+    prefixes: document.getElementById('prefixes').value,
+    family: document.getElementById('family').value,
+    tolerance: document.getElementById('tolerance').value,
+    all: document.getElementById('runAll').checked
+  };
+
+  Array.prototype.forEach.call(fileList, function (file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var html;
+      try {
+        html = render(file.name, runPipeline(file.name, toBase64(reader.result), opts));
+      } catch (e) {
+        html = '<div class="panel"><div class="file">' + esc(file.name) +
+               '</div><p class="err">Harness failed: ' + esc(e.message) + '</p></div>';
+      }
+      out.insertAdjacentHTML('beforeend', html);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+var drop = document.getElementById('drop');
+var picker = document.getElementById('picker');
+drop.addEventListener('click', function () { picker.click(); });
+picker.addEventListener('change', function () { handleFiles(picker.files); });
+drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
+drop.addEventListener('drop', function (e) {
+  e.preventDefault();
+  drop.classList.remove('over');
+  handleFiles(e.dataTransfer.files);
+});
+
+/* exposed so an automated browser check can drive the page without a real drop event */
+window.__runFromBase64 = function (name, b64) {
+  return runPipeline(name, b64, {
+    prefixes: document.getElementById('prefixes').value,
+    family: '', tolerance: '', all: false
+  });
+};
+</script>
+</body>
+</html>
