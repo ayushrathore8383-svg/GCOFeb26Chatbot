@@ -142,10 +142,13 @@ function runPipeline(fileName, b64, opts) {
     if ((v === 'rej' || v === 'err') && !opts.all) { stopped = true; }
   }
 
+  var extract = null;
+
   step(1, 'File format', validateFileFormat(fileName, b64));
   if (!stopped) { step(2, 'Password protection', validatePasswordProtection(b64)); }
   if (!stopped) {
-    pdfText = zv_extractPdfText(b64).text;
+    extract = zv_extractPdfText(b64);
+    pdfText = extract.text;
     step(3, 'Zero value', validateZeroValue('', pdfText, opts.tolerance));
   }
   if (!stopped) { step(4, 'Classification', classifyDocument('', pdfText, opts.family)); }
@@ -156,7 +159,7 @@ function runPipeline(fileName, b64, opts) {
   for (var s = 0; s < steps.length; s++) {
     if (steps[s].result.status !== 'PASSED') { clean = false; }
   }
-  return { steps: steps, pdfText: pdfText, clean: clean };
+  return { steps: steps, pdfText: pdfText, clean: clean, extract: extract };
 }
 
 function esc(s) {
@@ -193,10 +196,28 @@ function render(fileName, run) {
         '(SKIPPED rows above)</div>';
   }
 
+  /* When there is no text, say what was actually observed. "Scanned" and "this
+     extractor could not read the streams" look identical from the outside and need
+     completely different fixes, so never guess between them. */
+  var diag = '';
+  var x = run.extract;
+  if (x && !x.hasTextLayer) {
+    diag = '<div class="verdict warn" style="font-weight:400">' +
+      '<b>No text could be read.</b> ' + esc(x.noTextReason) + '.<br>' +
+      'Streams found ' + x.streamsFound + ', decoded ' + x.streamsDecoded +
+      ', carrying text ' + x.streamsWithText + ', image streams ' + x.imageStreams + '.<br>' +
+      'Filters seen: ' + esc(x.filtersSeen || 'none') +
+      (x.filtersFailed ? '<br><b>Filters that failed: ' + esc(x.filtersFailed) + '</b>' : '') +
+      '</div>';
+  } else if (x) {
+    diag = '<p class="reason">Text layer read from ' + x.streamsWithText + ' of ' +
+      x.streamsFound + ' stream(s). Filters: ' + esc(x.filtersSeen || 'none') + '.</p>';
+  }
+
   return '<div class="panel">' +
     '<div class="file">' + esc(fileName) + '</div>' +
     '<table><thead><tr><th>Check</th><th></th><th>Status</th><th>Reason</th></tr></thead>' +
-    '<tbody>' + rows + '</tbody></table>' + v +
+    '<tbody>' + rows + '</tbody></table>' + v + diag +
     '<details><summary>Extracted text layer (' + run.pdfText.length + ' chars)</summary>' +
     '<pre>' + esc(run.pdfText || '(none - scanned or image-only PDF)') + '</pre></details>' +
     '<details><summary>Raw result objects</summary><pre>' +

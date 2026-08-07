@@ -107,6 +107,38 @@ console.log('\n   text extraction sanity');
     check('scanned pdf has no text layer', s.hasTextLayer, false);
 })();
 
+console.log('\n   stream filter coverage');
+(function () {
+    var baseline = LIB.zero.zv_extractPdfText(b64('valid_invoice.pdf')).text;
+    check('baseline flate text non-empty', baseline.length > 300, true);
+    [
+        ['lzw_invoice_v11.pdf', 'LZWDecode'],
+        ['a85_lzw_invoice.pdf', 'ASCII85Decode'],
+        ['runlength_invoice.pdf', 'RunLengthDecode'],
+        ['valid_invoice_uncompressed.pdf', '']
+    ].forEach(function (t) {
+        var r = LIB.zero.zv_extractPdfText(b64(t[0]));
+        check(t[0] + ' text matches flate baseline', r.text === baseline, true);
+        if (t[1]) {
+            check(t[0] + ' filter reported', r.filtersSeen.indexOf(t[1]) >= 0, true);
+        }
+        check(t[0] + ' no failed filters', r.filtersFailed, '');
+    });
+})();
+
+console.log('\n   no-text diagnostics distinguish a scan from a decode failure');
+(function () {
+    var scan = LIB.zero.zv_extractPdfText(b64('scanned_image_only.pdf'));
+    check('image-only has no text', scan.hasTextLayer, false);
+    check('image-only counts image streams', scan.imageStreams, 1);
+    check('image-only names DCTDecode', scan.filtersSeen.indexOf('DCTDecode') >= 0, true);
+    check('image-only reason mentions image', scan.noTextReason.indexOf('image') >= 0, true);
+    check('image-only does not blame a filter', scan.filtersFailed, '');
+
+    var lzw = LIB.zero.zv_extractPdfText(b64('lzw_invoice_v11.pdf'));
+    check('lzw pdf reports no failure reason', lzw.noTextReason, '');
+})();
+
 console.log('\n3. validateZeroValue');
 [
     ['valid_invoice.pdf', 'PASSED', 570],

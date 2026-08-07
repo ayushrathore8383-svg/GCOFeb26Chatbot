@@ -70,6 +70,7 @@ function validatePharmacyInvoice(base64Content, textOverride, pharmacyPrefixes) 
         matchedPrefix: '',
         prefixesUsed: '',
         hasTextLayer: false,
+        noTextReason: '',
         error: ''
     };
 
@@ -93,15 +94,17 @@ function validatePharmacyInvoice(base64Content, textOverride, pharmacyPrefixes) 
             return res;
         }
 
-        var text = __P___resolveText(base64Content, textOverride);
+        var resolved = __P___resolveText(base64Content, textOverride);
+        var text = resolved.text;
+        res.noTextReason = resolved.reason;
         res.hasTextLayer = text.length > 20;
 
         if (!res.hasTextLayer) {
             res.passed = true;
             res.passedFlag = 'Y';
             res.status = 'PO_NOT_FOUND';
-            res.reason = 'No text layer found (scanned or image-only PDF) - PO number ' +
-                'cannot be read here. Re-run this check on the DU-extracted PO number.';
+            res.reason = 'No readable text: ' + res.noTextReason +
+                '. Re-run this check on the DU-extracted PO number.';
             return res;
         }
 

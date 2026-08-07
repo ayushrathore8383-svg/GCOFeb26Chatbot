@@ -89,6 +89,7 @@ function runPipeline(filePath) {
     var steps = [];
     var pdfText = '';
     var stopped = false;
+    var extract = null;
 
     function record(n, name, r) {
         steps.push({ n: n, name: name, result: r });
@@ -98,23 +99,24 @@ function runPipeline(filePath) {
     }
 
     record(1, 'File format', LIB.format.validateFileFormat(fileName, b64));
-    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false }; }
+    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false, extract: extract }; }
 
     record(2, 'Password protection', LIB.password.validatePasswordProtection(b64));
-    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false }; }
+    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false, extract: extract }; }
 
     /* extract once, reuse across 3-5, exactly as the integration should */
     var extracted = LIB.zero.zv_extractPdfText(b64);
     pdfText = extracted.text;
+    extract = extracted;
 
     record(3, 'Zero value', LIB.zero.validateZeroValue('', pdfText, opt.tolerance));
-    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false }; }
+    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false, extract: extract }; }
 
     record(4, 'Classification', LIB.classify.classifyDocument('', pdfText, opt.family));
-    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false }; }
+    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false, extract: extract }; }
 
     record(5, 'Pharmacy', LIB.pharmacy.validatePharmacyInvoice('', pdfText, opt.prefixes));
-    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false }; }
+    if (stopped) { return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: false, extract: extract }; }
 
     record(6, 'Multi-invoice', LIB.multi.validateMultiInvoice(b64, pdfText));
 
@@ -122,7 +124,7 @@ function runPipeline(filePath) {
     for (var s = 0; s < steps.length; s++) {
         if (steps[s].result.status !== 'PASSED') { reachedDu = false; }
     }
-    return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: reachedDu };
+    return { fileName: fileName, steps: steps, pdfText: pdfText, reachedDu: reachedDu, extract: extract };
 }
 
 /* ---------- reporting ---------- */
@@ -152,6 +154,18 @@ function report(run) {
         console.log('        ' + s.result.reason);
         if (s.result.error) { console.log('        error: ' + s.result.error); }
     });
+
+    var x = run.extract;
+    if (x && !x.hasTextLayer) {
+        console.log('\n  no text could be read: ' + x.noTextReason);
+        console.log('  streams ' + x.streamsFound + ', decoded ' + x.streamsDecoded +
+            ', with text ' + x.streamsWithText + ', image ' + x.imageStreams +
+            ' | filters: ' + (x.filtersSeen || 'none') +
+            (x.filtersFailed ? ' | FAILED: ' + x.filtersFailed : ''));
+    } else if (x) {
+        console.log('\n  text read from ' + x.streamsWithText + '/' + x.streamsFound +
+            ' stream(s) | filters: ' + (x.filtersSeen || 'none'));
+    }
 
     var stop = rejectingStep(run);
     if (stop) {
@@ -196,7 +210,10 @@ function csvRow(run) {
         by[4] ? by[4].documentType : '',
         by[5] ? by[5].poNumber : '',
         by[6] ? by[6].pageCount : '',
-        by[6] ? by[6].invoiceNumbers : ''
+        by[6] ? by[6].invoiceNumbers : '',
+        run.extract ? run.extract.filtersSeen : '',
+        run.extract ? run.extract.filtersFailed : '',
+        run.extract ? run.extract.noTextReason : ''
     ].map(csvCell).join(',');
 }
 
@@ -251,7 +268,8 @@ if (opt.csv) {
     var header = ['file', 'outcome', 'check1_format', 'check2_password', 'check3_zero',
         'check4_class', 'check5_pharmacy', 'check6_multi', 'has_text_layer',
         'text_chars', 'gross_total', 'document_type', 'po_number', 'page_count',
-        'invoice_numbers'].map(csvCell).join(',');
+        'invoice_numbers', 'filters_seen', 'filters_failed',
+        'no_text_reason'].map(csvCell).join(',');
     var body = runs.map(csvRow).join('\n');
     fs.writeFileSync(opt.csv, header + '\n' + body + '\n');
     console.log('\nwrote ' + opt.csv);

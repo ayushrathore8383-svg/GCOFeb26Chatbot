@@ -98,6 +98,7 @@ function validateMultiInvoice(base64Content, textOverride) {
         pageCount: 0,
         detectedBy: '',
         hasTextLayer: false,
+        noTextReason: '',
         error: ''
     };
 
@@ -105,15 +106,17 @@ function validateMultiInvoice(base64Content, textOverride) {
         var bytes = __P___b64ToBytes(base64Content);
         res.pageCount = bytes.length > 0 ? mi_pageCount(bytes) : 0;
 
-        var text = __P___resolveText(base64Content, textOverride);
+        var resolved = __P___resolveText(base64Content, textOverride);
+        var text = resolved.text;
+        res.noTextReason = resolved.reason;
         res.hasTextLayer = text.length > 20;
 
         if (!res.hasTextLayer) {
             res.passed = true;
             res.passedFlag = 'Y';
             res.status = 'UNDETERMINED';
-            res.reason = 'No text layer found (scanned or image-only PDF) - cannot count ' +
-                'invoices here. ' + res.pageCount + ' page(s) detected. Sending to ' +
+            res.reason = 'No readable text: ' + res.noTextReason + '. ' + res.pageCount +
+                ' page(s) detected. Cannot count invoices here - sending to ' +
                 'Document Understanding.';
             return res;
         }

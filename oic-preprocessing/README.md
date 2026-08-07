@@ -119,6 +119,23 @@ their could-not-determine status and the document goes to DU unchecked. Only che
 scanned, four of these six checks will not fire on it. Measure that share before relying
 on this gate — `hasTextLayer` is returned by every text-based check so you can count it.
 
+Do not take "no text layer" at face value, though: a PDF this extractor cannot read looks
+identical from the outside to a genuine scan, and the two need completely different
+fixes. Every text-based check returns `noTextReason` saying what was actually observed,
+and `zv_extractPdfText` returns the full picture — `streamsFound`, `streamsDecoded`,
+`streamsWithText`, `imageStreams`, `filtersSeen` and `filtersFailed`. A real scan reports
+image streams and no failed filters. A decode failure names the filter that stopped it.
+Both testers show this automatically whenever no text was found.
+
+**Stream filters handled:** `FlateDecode`, `LZWDecode`, `ASCII85Decode`, `ASCIIHexDecode`,
+`RunLengthDecode`, unfiltered streams, filter chains such as
+`/Filter [/ASCII85Decode /LZWDecode]`, and PNG predictors. `LZWDecode` matters more than
+it looks: FlateDecode only arrived in PDF 1.2, so any PDF 1.0 or 1.1 producer compresses
+with LZW instead, and an extractor that only knows Flate reports every one of those files
+as having no text layer. Image filters (`DCTDecode`, `JPXDecode`, `CCITTFaxDecode`,
+`JBIG2Decode`) are identified and skipped rather than being decoded, since they carry no
+text. Anything else is reported by name in `filtersFailed` instead of failing silently.
+
 **Check 2 cannot tell a user password from an owner password.** An `/Encrypt` dictionary
 means the file is encrypted, which the library detects reliably. Deciding whether the
 empty password opens it needs RC4 and AES, which is not implemented here. A
@@ -180,7 +197,7 @@ straight out of an OIC activity, say — `test/run.js` shows the sandbox pattern
 ```bash
 node build.js          # regenerate dist/, including the standalone tester
 python3 test/make_fixtures.py
-node test/run.js       # 59 assertions
+node test/run.js       # 77 assertions
 ```
 
 `src/_coreA.js` holds base64 decoding, `src/_coreB.js` holds the DEFLATE decompressor and
